@@ -40,18 +40,24 @@ export type AuditEvent = {
     | "WORKFLOW_BLOCKED"
     | "SHORTAGE_CALCULATED"
     | "CALL_COMPLETED"
+    | "CALL_RETRY_SCHEDULED"
+    | "CALL_TIMEOUT"
     | "OFFER_REJECTED"
     | "OFFER_SELECTED"
     | "POLICY_PASSED"
     | "PURCHASE_ORDER_CREATED"
     | "HUMAN_EXCEPTION_REQUIRED"
-    | "NO_ACTION_REQUIRED";
+    | "NO_ACTION_REQUIRED"
+    | "DUPLICATE_RUN_BLOCKED"
+    | "WORKFLOW_CANCELLED"
+    | "WORKFLOW_FAILED";
   at: string;
   summary: string;
   evidence: Record<string, string | number | boolean | null>;
 };
 
 export type PurchaseOrderRequest = {
+  idempotencyKey: string;
   workflowId: string;
   supplierId: string;
   supplierName: string;
@@ -99,7 +105,8 @@ export type WorkflowResult = {
     | "ORDER_CREATED"
     | "HUMAN_EXCEPTION_REQUIRED"
     | "NO_ACTION_REQUIRED"
-    | "EXECUTION_BLOCKED";
+    | "EXECUTION_BLOCKED"
+    | "FAILED";
   decision: ProcurementDecision | null;
   purchaseOrder: PurchaseOrder | null;
   proof: DecisionProof | null;
@@ -116,6 +123,7 @@ export function toSupplierCallRequest(
 ): SupplierCallRequest {
   return {
     workflowId: input.workflowId,
+    attemptNumber: 1,
     supplierId: supplier.supplierId,
     supplierName: supplier.supplierName,
     phoneE164: supplier.phoneE164,
