@@ -11,6 +11,7 @@ export {
   StaticKillSwitch,
 } from "./sessionStore";
 export {
+  CallEWebhookAuthenticityVerifier,
   FailClosedWebhookAuthenticityVerifier,
   InMemoryJudgeWebhookEventStore,
   InMemoryManagerResultSink,

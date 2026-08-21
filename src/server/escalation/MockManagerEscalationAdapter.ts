@@ -76,7 +76,20 @@ export class MockManagerEscalationAdapter implements ManagerEscalationPort {
     }
 
     const structuredResult = resultForPreset(this.preset);
-    const validation = validateManagerEscalationResult(structuredResult);
+    const decisionEvidence = `Synthetic manager response: ${structuredResult.decision}`;
+    const validation = validateManagerEscalationResult({
+      decision: structuredResult.decision,
+      ...(structuredResult.preferredContactAt
+        ? {
+            preferredContactAt: structuredResult.preferredContactAt,
+            preferredContactEvidence: `Synthetic callback time: ${structuredResult.preferredContactAt}`,
+          }
+        : {}),
+      restrictedActionsRequested: structuredResult.restrictedActionsRequested,
+      optOutRequested: structuredResult.optOutRequested,
+      managerSummary: structuredResult.summary ?? "",
+      decisionEvidence,
+    });
     const task: ManagerEscalationTask = {
       callId: `mock-manager-${request.runId}`,
       status: "completed",
@@ -88,7 +101,7 @@ export class MockManagerEscalationAdapter implements ManagerEscalationPort {
         decision: {
           field: "decision",
           source: "transcript",
-          excerpt: `Synthetic manager response: ${structuredResult.decision}`,
+          excerpt: decisionEvidence,
           verified: this.preset !== "UNVERIFIED_RESPONSE",
         },
       },

@@ -25,6 +25,15 @@ function isAllowedPhone(phoneE164: string, allowedCallingCodes: string[]): boole
     allowedCallingCodes.some((prefix) => phoneE164.startsWith(prefix));
 }
 
+function callRegionForPhone(phoneE164: string): ManagerEscalationRequest["region"] | null {
+  if (phoneE164.startsWith("+33")) return "FR";
+  if (phoneE164.startsWith("+44")) return "GB";
+  if (phoneE164.startsWith("+48")) return "PL";
+  if (phoneE164.startsWith("+49")) return "DE";
+  if (phoneE164.startsWith("+1")) return "US";
+  return null;
+}
+
 function responseFromClaim(
   claim: StoredCallClaim,
   runtime: StartManagerCallResponse["runtime"],
@@ -110,6 +119,10 @@ export class JudgeBackendService {
     if (!isAllowedPhone(request.phoneE164, this.allowedCallingCodes)) {
       throw new JudgeBackendError("Phone number or country is not allowed", "PHONE_NOT_ALLOWED");
     }
+    const callRegion = callRegionForPhone(request.phoneE164);
+    if (!callRegion) {
+      throw new JudgeBackendError("Phone number or country is not allowed", "PHONE_NOT_ALLOWED");
+    }
     if (await this.dependencies.killSwitch.isActive()) {
       throw new JudgeBackendError("Global call kill switch is active", "KILL_SWITCH_ACTIVE");
     }
@@ -157,6 +170,7 @@ export class JudgeBackendService {
       attemptNumber: 1,
       idempotencyKey: request.idempotencyKey,
       phoneE164: request.phoneE164,
+      region: callRegion,
       locale: request.locale,
       consentConfirmed: true,
       context,

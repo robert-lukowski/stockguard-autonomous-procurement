@@ -1,4 +1,4 @@
-import type { SupportedCallLocale } from "../calle";
+import type { SupportedCallLocale, SupportedCallRegion } from "../calle";
 
 export type SafeManagerDecision =
   | "ACKNOWLEDGE_AND_START_HUMAN_SOURCING"
@@ -66,6 +66,7 @@ export type ManagerEscalationRequest = {
   attemptNumber: 1;
   idempotencyKey: string;
   phoneE164: string;
+  region: SupportedCallRegion;
   locale: SupportedCallLocale;
   consentConfirmed: true;
   context: ManagerEscalationContext;

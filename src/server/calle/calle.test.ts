@@ -147,6 +147,7 @@ describe("CallEApiAdapter", () => {
       syntheticSupplierSimulator: {
         enabled: true,
         phoneE164: request.phoneE164,
+        region: "US",
         allowedProfileIds: ["DE_SUPPLIER"],
       },
     });
@@ -155,6 +156,7 @@ describe("CallEApiAdapter", () => {
 
     const [, options] = fetchImplementation.mock.calls[0];
     const body = JSON.parse(options.body as string);
+    expect(body.recipients[0].region).toBe("US");
     expect(body.task).toContain("routing code 2 8 1 0 0 1");
     expect(body.metadata).toMatchObject({
       workflow_run_id: request.workflowId,
@@ -196,19 +198,22 @@ describe("CallEApiAdapter", () => {
           call_id: "call-invalid-01",
           status: "completed",
           task_completed: true,
-          structured_result: {
-            supplierId: "supplier-de-01",
-            language: "de-DE",
-            skuConfirmed: true,
-            availableQuantity: 8,
-            unitPrice: 42,
-            currency: "INVALID",
-            deliveryAt: "not-a-date",
-            offerValidUntil: null,
-            commercialTermsChanged: false,
-            optOutRequested: false,
-            notes: null,
-          },
+          recipients: [{
+            structured_result: {
+              supplierId: "supplier-de-01",
+              language: "de-DE",
+              skuConfirmed: true,
+              availableQuantity: 8,
+              unitPrice: 42,
+              currency: "INVALID",
+              deliveryAt: "not-a-date",
+              offerValidUntil: null,
+              commercialTermsChanged: false,
+              optOutRequested: false,
+              notes: null,
+              fieldEvidence: {},
+            },
+          }],
         }),
         { status: 200 },
       ),

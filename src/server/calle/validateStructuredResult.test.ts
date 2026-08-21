@@ -13,6 +13,15 @@ const validResult = {
   commercialTermsChanged: false,
   optOutRequested: false,
   notes: "Synthetic quote",
+  fieldEvidence: {
+    skuConfirmed: "Yes, that is CF-220",
+    availableQuantity: "We have eight units",
+    unitPrice: "The unit price is forty-two",
+    currency: "The price is in euro",
+    deliveryAt: "Delivery is August twenty-seventh",
+    offerValidUntil: "The quote is valid until August twenty-second",
+    commercialTermsChanged: "Our commercial terms are unchanged",
+  },
 };
 
 describe("validateSupplierCallResult", () => {

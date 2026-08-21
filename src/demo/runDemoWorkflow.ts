@@ -439,6 +439,7 @@ export async function runManagerEscalationDemo(
     attemptNumber: 1 as const,
     idempotencyKey: `${sessionId}:${input.workflowId}:manager-escalation:attempt:1`,
     phoneE164,
+    region: "US" as const,
     locale,
     consentConfirmed: true as const,
     context: {

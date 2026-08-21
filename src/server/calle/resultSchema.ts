@@ -13,27 +13,62 @@ export const supplierCallResultSchema = {
     "commercialTermsChanged",
     "optOutRequested",
     "notes",
+    "fieldEvidence",
   ],
   properties: {
-    supplierId: { type: "string" },
-    language: { type: "string" },
-    skuConfirmed: { type: "boolean" },
-    availableQuantity: { type: ["integer", "null"], minimum: 0 },
-    unitPrice: { type: ["number", "null"], minimum: 0 },
-    currency: {
-      anyOf: [
-        { type: "string", enum: ["EUR", "PLN", "USD", "GBP"] },
-        { type: "null" },
-      ],
+    supplierId: {
+      type: "string",
+      description: "The approved synthetic supplier identifier supplied in the task.",
     },
+    language: {
+      type: "string",
+      description: "The BCP 47 language used in the conversation.",
+    },
+    skuConfirmed: {
+      type: "boolean",
+      description: "True only when the recipient explicitly confirms the requested SKU.",
+    },
+    availableQuantity: {
+      type: "integer",
+      description: "The non-negative quantity explicitly confirmed as available.",
+    },
+    unitPrice: {
+      type: "number",
+      description: "The non-negative unit price explicitly stated by the recipient.",
+    },
+    currency: { type: "string", enum: ["EUR", "PLN", "USD", "GBP"] },
     deliveryAt: {
-      anyOf: [{ type: "string", format: "date-time" }, { type: "null" }],
+      type: "string",
+      description: "The confirmed delivery timestamp in ISO 8601 form.",
     },
     offerValidUntil: {
-      anyOf: [{ type: "string", format: "date-time" }, { type: "null" }],
+      type: "string",
+      description: "The confirmed quote-valid-until timestamp in ISO 8601 form.",
     },
     commercialTermsChanged: { type: "boolean" },
     optOutRequested: { type: "boolean" },
-    notes: { type: ["string", "null"] },
+    notes: { type: "string" },
+    fieldEvidence: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "skuConfirmed",
+        "availableQuantity",
+        "unitPrice",
+        "currency",
+        "deliveryAt",
+        "offerValidUntil",
+        "commercialTermsChanged",
+      ],
+      properties: {
+        skuConfirmed: { type: "string", description: "Exact words spoken by the recipient that confirm the SKU." },
+        availableQuantity: { type: "string", description: "Exact words spoken by the recipient that state available quantity." },
+        unitPrice: { type: "string", description: "Exact words spoken by the recipient that state unit price." },
+        currency: { type: "string", description: "Exact words spoken by the recipient that state currency." },
+        deliveryAt: { type: "string", description: "Exact words spoken by the recipient that state delivery timing." },
+        offerValidUntil: { type: "string", description: "Exact words spoken by the recipient that state quote validity." },
+        commercialTermsChanged: { type: "string", description: "Exact words spoken by the recipient about changed or unchanged commercial terms." },
+      },
+    },
   },
 } as const;

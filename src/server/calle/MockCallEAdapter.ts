@@ -76,7 +76,6 @@ export class MockCallEAdapter implements SupplierCallingPort {
       language: request.locale,
       ...result,
     };
-    const validation = validateSupplierCallResult(structuredResult);
     const evidenceFields = [
       "skuConfirmed",
       "availableQuantity",
@@ -86,6 +85,16 @@ export class MockCallEAdapter implements SupplierCallingPort {
       "offerValidUntil",
       "commercialTermsChanged",
     ] as const;
+    const evidenceExcerpts = Object.fromEntries(
+      evidenceFields.map((field) => [
+        field,
+        `Synthetic transcript evidence confirms ${field}: ${String(structuredResult[field])}`,
+      ]),
+    );
+    const validation = validateSupplierCallResult({
+      ...structuredResult,
+      fieldEvidence: evidenceExcerpts,
+    });
     const fieldEvidence = Object.fromEntries(
       evidenceFields.filter((field) => structuredResult[field] !== null)
         .map((field) => [
@@ -93,7 +102,7 @@ export class MockCallEAdapter implements SupplierCallingPort {
           {
             field,
             source: "transcript" as const,
-            excerpt: `Synthetic transcript evidence confirms ${field}: ${String(structuredResult[field])}`,
+            excerpt: evidenceExcerpts[field],
             verified: true,
           },
         ]),

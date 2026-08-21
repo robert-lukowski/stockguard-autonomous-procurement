@@ -1,5 +1,13 @@
 import { managerEscalationResultSchema } from "./resultSchema";
 import { ManagerEscalationSafetyError, validateManagerEscalationAuthorization } from "./safety";
+import {
+  callFailureText,
+  callIdFrom,
+  evidenceAppearsInTranscript,
+  recipientStructuredResult,
+  userTranscript,
+  type CallETaskSnapshot,
+} from "../calle";
 import type {
   ManagerEscalationAuthorization,
   ManagerEscalationPort,
@@ -14,8 +22,29 @@ type Config = {
   apiKey: string;
   baseUrl?: string;
   realCallsEnabled?: boolean;
+  webhookUrl?: string;
   fetchImplementation?: FetchLike;
 };
+
+function mapStatus(value: string | undefined): ManagerEscalationTask["status"] {
+  switch (value) {
+    case "queued":
+    case "in_progress":
+    case "completed":
+    case "failed":
+      return value;
+    default:
+      return "failed";
+  }
+}
+
+function mapOutcome(snapshot: CallETaskSnapshot): ManagerEscalationTask["outcome"] {
+  const failure = callFailureText(snapshot);
+  if (failure.includes("no_answer") || failure.includes("no answer")) return "NO_ANSWER";
+  if (failure.includes("voicemail") || failure.includes("answering machine")) return "VOICEMAIL";
+  if (failure.includes("timeout") || failure.includes("timed out")) return "TIMEOUT";
+  return snapshot.status === "completed" ? "ANSWERED" : "FAILED";
+}
 
 export class CallEManagerEscalationAdapter implements ManagerEscalationPort {
   private readonly fetchImplementation: FetchLike;
@@ -26,6 +55,12 @@ export class CallEManagerEscalationAdapter implements ManagerEscalationPort {
   constructor(private readonly config: Config) {
     this.fetchImplementation = config.fetchImplementation ?? fetch;
     this.baseUrl = config.baseUrl ?? "https://api.heycall-e.com";
+    if (config.webhookUrl) {
+      const webhook = new URL(config.webhookUrl);
+      if (webhook.protocol !== "https:") {
+        throw new Error("CALL-E webhook URL must use HTTPS");
+      }
+    }
   }
 
   async startManagerEscalation(
@@ -67,8 +102,15 @@ export class CallEManagerEscalationAdapter implements ManagerEscalationPort {
       },
       body: JSON.stringify({
         task,
-        recipients: [{ phones: [request.phoneE164], locale: request.locale }],
+        recipients: [{
+          phones: [request.phoneE164],
+          region: request.region,
+          locale: request.locale,
+        }],
         recipient_result_schema: managerEscalationResultSchema,
+        ...(this.config.webhookUrl
+          ? { webhook_url: this.config.webhookUrl }
+          : {}),
         metadata: {
           workflow_run_id: request.runId,
           judge_session_id: request.sessionId,
@@ -78,22 +120,31 @@ export class CallEManagerEscalationAdapter implements ManagerEscalationPort {
     });
     if (!response.ok) throw new Error(`CALL-E manager escalation failed with HTTP ${response.status}`);
 
-    const payload = (await response.json()) as Record<string, unknown>;
-    const validation = validateManagerEscalationResult(payload.structured_result);
-    const callId = typeof payload.call_id === "string" ? payload.call_id : typeof payload.id === "string" ? payload.id : null;
+    const payload = (await response.json()) as CallETaskSnapshot;
+    const validation = validateManagerEscalationResult(
+      recipientStructuredResult(payload),
+    );
+    const callId = callIdFrom(payload);
     if (!callId) throw new Error("CALL-E response did not include a call ID");
-    const completed = payload.task_completed === true;
+    const transcript = userTranscript(payload);
+    const fieldEvidence: ManagerEscalationTask["fieldEvidence"] = {};
+    for (const [field, excerpt] of Object.entries(validation.evidenceExcerpts)) {
+      const verified = evidenceAppearsInTranscript(excerpt, transcript);
+      fieldEvidence[field as keyof typeof fieldEvidence] = {
+        field: field as "decision" | "preferredContactAt",
+        source: verified ? "transcript" : "recipient_result",
+        excerpt,
+        verified,
+      };
+    }
     const mapped: ManagerEscalationTask = {
       callId,
-      status: completed ? "completed" : "queued",
-      outcome: completed ? "ANSWERED" : "FAILED",
-      taskCompleted: completed,
+      status: mapStatus(payload.status),
+      outcome: mapOutcome(payload),
+      taskCompleted: payload.task_completed === true,
       structuredResult: validation.result,
       evidence: Array.isArray(payload.evidence) ? payload.evidence.filter((item): item is string => typeof item === "string") : [],
-      fieldEvidence:
-        typeof payload.field_evidence === "object" && payload.field_evidence !== null
-          ? (payload.field_evidence as ManagerEscalationTask["fieldEvidence"])
-          : {},
+      fieldEvidence,
       schemaValidation: { valid: validation.valid, issues: validation.issues },
     };
     this.usedSessions.add(request.sessionId);

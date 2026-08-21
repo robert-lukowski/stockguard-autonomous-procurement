@@ -1,12 +1,20 @@
 import { supplierCallResultSchema } from "./resultSchema";
+import {
+  callFailureText,
+  callIdFrom,
+  evidenceAppearsInTranscript,
+  recipientStructuredResult,
+  userTranscript,
+  type CallETaskSnapshot,
+} from "./runtime";
 import { validateSupplierCallResult } from "./validateStructuredResult";
 import { CallSafetyError, validateCallAuthorization } from "./safety";
 import type {
   CallAuthorization,
   SupplierCallingPort,
   SupplierCallRequest,
-  SupplierCallStructuredResult,
   SupplierCallTask,
+  SupportedCallRegion,
 } from "./types";
 
 type FetchLike = typeof fetch;
@@ -15,30 +23,55 @@ type CallEApiConfig = {
   apiKey: string;
   baseUrl?: string;
   realCallsEnabled?: boolean;
+  webhookUrl?: string;
   fetchImplementation?: FetchLike;
   syntheticSupplierSimulator?: {
     enabled: boolean;
     phoneE164: string;
+    region: SupportedCallRegion;
     allowedProfileIds: Array<
       "DE_SUPPLIER" | "FR_SUPPLIER" | "PL_SUPPLIER"
     >;
   };
 };
 
-type CallEApiResponse = {
-  id?: string;
-  call_id?: string;
-  status?: SupplierCallTask["status"];
-  task_completed?: boolean;
-  completion_confidence?: { score?: number } | number | null;
-  structured_result?: SupplierCallStructuredResult | null;
-  evidence?: string[];
-  field_evidence?: SupplierCallTask["fieldEvidence"];
-  outcome?: SupplierCallTask["outcome"];
-};
+function taskStatus(value: string | undefined): SupplierCallTask["status"] {
+  switch (value) {
+    case "queued":
+    case "in_progress":
+    case "completed":
+    case "failed":
+      return value;
+    case "canceled":
+    default:
+      return "failed";
+  }
+}
 
-function mapTask(response: CallEApiResponse): SupplierCallTask {
-  const callId = response.call_id ?? response.id;
+function taskOutcome(
+  response: CallETaskSnapshot,
+  validation: ReturnType<typeof validateSupplierCallResult>,
+  transcript: string,
+): SupplierCallTask["outcome"] {
+  const failure = callFailureText(response);
+  if (failure.includes("no_answer") || failure.includes("no answer")) {
+    return "NO_ANSWER";
+  }
+  if (failure.includes("voicemail") || failure.includes("answering machine")) {
+    return "VOICEMAIL";
+  }
+  if (failure.includes("timeout") || failure.includes("timed out")) {
+    return "TIMEOUT";
+  }
+  if (["failed", "canceled"].includes(response.status ?? "")) return "FAILED";
+  if (response.status === "completed" && validation.valid && transcript.length > 0) {
+    return "ANSWERED";
+  }
+  return "INCOMPLETE";
+}
+
+function mapTask(response: CallETaskSnapshot): SupplierCallTask {
+  const callId = callIdFrom(response);
   if (!callId) throw new Error("CALL-E response did not include a call ID");
 
   const rawConfidence = response.completion_confidence;
@@ -46,27 +79,37 @@ function mapTask(response: CallEApiResponse): SupplierCallTask {
     typeof rawConfidence === "number"
       ? rawConfidence
       : rawConfidence?.score ?? null;
-  const validation = validateSupplierCallResult(response.structured_result);
+  const validation = validateSupplierCallResult(
+    recipientStructuredResult(response),
+  );
+  const transcript = userTranscript(response);
+  const fieldEvidence = Object.fromEntries(
+    Object.entries(validation.evidenceExcerpts).map(([field, excerpt]) => {
+      const verified = evidenceAppearsInTranscript(excerpt, transcript);
+      return [field, {
+        field,
+        source: verified ? "transcript" : "structured-result",
+        excerpt,
+        verified,
+      }];
+    }),
+  ) as SupplierCallTask["fieldEvidence"];
 
   return {
     callId,
-    status: response.status ?? "queued",
-    taskCompleted: response.task_completed ?? false,
+    status: taskStatus(response.status),
+    taskCompleted: response.task_completed === true,
     completionConfidence,
     structuredResult: validation.result,
-    evidence: response.evidence ?? [],
-    fieldEvidence: response.field_evidence ?? {},
+    evidence: Array.isArray(response.evidence)
+      ? response.evidence.filter((item): item is string => typeof item === "string")
+      : [],
+    fieldEvidence,
     schemaValidation: {
       valid: validation.valid,
       issues: validation.issues,
     },
-    outcome:
-      response.outcome ??
-      (response.task_completed
-        ? "ANSWERED"
-        : response.status === "failed"
-          ? "FAILED"
-          : "INCOMPLETE"),
+    outcome: taskOutcome(response, validation, transcript),
   };
 }
 
@@ -78,6 +121,12 @@ export class CallEApiAdapter implements SupplierCallingPort {
   constructor(private readonly config: CallEApiConfig) {
     this.baseUrl = config.baseUrl ?? "https://api.heycall-e.com";
     this.fetchImplementation = config.fetchImplementation ?? fetch;
+    if (config.webhookUrl) {
+      const webhook = new URL(config.webhookUrl);
+      if (webhook.protocol !== "https:") {
+        throw new Error("CALL-E webhook URL must use HTTPS");
+      }
+    }
   }
 
   async startSupplierCall(
@@ -140,11 +189,17 @@ export class CallEApiAdapter implements SupplierCallingPort {
         recipients: [
           {
             phones: [request.phoneE164],
-            region: request.region,
+            region:
+              request.syntheticRouting && this.config.syntheticSupplierSimulator
+                ? this.config.syntheticSupplierSimulator.region
+                : request.region,
             locale: request.locale,
           },
         ],
         recipient_result_schema: supplierCallResultSchema,
+        ...(this.config.webhookUrl
+          ? { webhook_url: this.config.webhookUrl }
+          : {}),
         metadata: {
           workflow_run_id: request.workflowId,
           supplier_id: request.supplierId,
@@ -175,7 +230,7 @@ export class CallEApiAdapter implements SupplierCallingPort {
       callsAlreadyStarted + 1,
     );
 
-    return mapTask((await response.json()) as CallEApiResponse);
+    return mapTask((await response.json()) as CallETaskSnapshot);
   }
 
   private validateSyntheticTarget(request: SupplierCallRequest): void {
@@ -238,6 +293,6 @@ export class CallEApiAdapter implements SupplierCallingPort {
       );
     }
 
-    return mapTask((await response.json()) as CallEApiResponse);
+    return mapTask((await response.json()) as CallETaskSnapshot);
   }
 }

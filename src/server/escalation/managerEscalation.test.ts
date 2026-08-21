@@ -17,6 +17,7 @@ const request: ManagerEscalationRequest = {
   attemptNumber: 1,
   idempotencyKey: "session-1:run-1:manager-escalation:attempt:1",
   phoneE164: "+15550109999",
+  region: "US",
   locale: "en-GB",
   consentConfirmed: true,
   context: {
@@ -49,10 +50,10 @@ describe("manager escalation result validation", () => {
   it("accepts only the bounded decision schema", () => {
     const result = validateManagerEscalationResult({
       decision: "REQUEST_WRITTEN_REPORT",
-      preferredContactAt: null,
       restrictedActionsRequested: [],
       optOutRequested: false,
-      summary: "Send the report",
+      managerSummary: "Send the report",
+      decisionEvidence: "Please send the written report",
     });
 
     expect(result.valid).toBe(true);
@@ -62,10 +63,10 @@ describe("manager escalation result validation", () => {
   it("rejects arbitrary free-form decisions", () => {
     const result = validateManagerEscalationResult({
       decision: "BUY_FROM_ANYONE_NOW",
-      preferredContactAt: null,
       restrictedActionsRequested: [],
       optOutRequested: false,
-      summary: null,
+      managerSummary: "Unsafe request",
+      decisionEvidence: "Buy from anyone now",
     });
 
     expect(result.valid).toBe(false);
