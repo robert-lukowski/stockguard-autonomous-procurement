@@ -1,5 +1,6 @@
 export { CallEApiAdapter } from "./CallEApiAdapter";
 export { MockCallEAdapter } from "./MockCallEAdapter";
+export type { MockSupplierResult } from "./MockCallEAdapter";
 export { supplierCallResultSchema } from "./resultSchema";
 export {
   CallSafetyError,
