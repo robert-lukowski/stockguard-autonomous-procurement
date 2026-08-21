@@ -17,10 +17,24 @@ export type DecisionProofPayload = {
   policyVersion: string;
   policyHash: string;
   offerHashes: Record<string, string>;
+  evidenceHashes: Record<string, string>;
   selectedSupplierId: string;
   selectedOfferId: string;
   passedChecks: string[];
-  rejectedSuppliers: Array<{ supplierId: string; failedChecks: string[] }>;
+  rejectedSuppliers: Array<{
+    supplierId: string;
+    failedChecks: string[];
+    requiresHumanChecks: string[];
+  }>;
+  ruleTrace: Array<{
+    supplierId: string;
+    checks: Array<{
+      id: string;
+      status: "PASS" | "FAIL" | "REQUIRES_HUMAN";
+      evidence: string;
+      inputs: Record<string, string | number | boolean | null>;
+    }>;
+  }>;
   orderValueEur: number;
   auditChain: HashChainedEvent[];
   auditRootHash: string;
