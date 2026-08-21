@@ -65,6 +65,20 @@ No valid access code, API credential or server-side authorization decision belon
 
 The TypeScript browser-to-backend contract is implemented in `src/server/judge`. Without a configured backend URL, it fails before transmitting the access code or number.
 
+The framework-neutral backend core is implemented in `src/server/judge/backend`. It can be wrapped by Lambda handlers later and currently provides:
+
+- PBKDF2-SHA256 access-code verification with a salted derived key supplied through a secret-store port;
+- random opaque session tokens stored only as SHA-256 hashes;
+- 15-minute session expiry and fixed-window authorization rate limiting;
+- an atomic one-call session claim with idempotent duplicate handling;
+- explicit consent, E.164 syntax and calling-code allowlisting;
+- a global call budget and fail-closed kill switch;
+- phone-number hashing instead of plaintext session persistence;
+- fail-closed webhook authenticity, event deduplication and event-ID conflict detection;
+- structured-result quarantine before workflow ingestion.
+
+All current persistence, rate-limit and budget implementations are in-memory test adapters. They demonstrate semantics but are not suitable for a distributed deployment.
+
 ## Proposed AWS deployment
 
 ```mermaid
@@ -128,9 +142,10 @@ The record is a **cryptographically signed, machine-verifiable decision record w
 
 1. **Complete:** public mock manager escalation, formal states, bounded result schema, evidence guardrail and Decision Proof v2.
 2. **Complete:** fail-closed frontend-to-backend contracts with no embedded access code.
-3. **Next:** deploy the minimal AWS backend, persistent idempotency/dedupe and TTL data model.
-4. **Next:** connect CALL-E credentials server-side and verify the exact webhook authenticity mechanism from official documentation.
-5. **Next:** run consented calls only to verified test participants and validate supported countries, latency, voicemail and transcript behavior.
-6. **Final:** enable the Devpost-only code, global call budget, kill switch, deletion control and KMS signer.
+3. **Complete:** local backend core for PBKDF2 verification, opaque sessions, one-call claims, rate limiting, global budget and fail-closed webhooks.
+4. **Next:** add Lambda/API Gateway adapters and persistent DynamoDB conditional writes without deploying them.
+5. **Next:** connect CALL-E credentials server-side and verify the exact webhook authenticity mechanism from official documentation.
+6. **Next:** run consented calls only to verified test participants and validate supported countries, latency, voicemail and transcript behavior.
+7. **Final:** enable the Devpost-only code, global call budget, kill switch, deletion control and KMS signer.
 
 No live call or paid AWS resource is created by the current implementation.

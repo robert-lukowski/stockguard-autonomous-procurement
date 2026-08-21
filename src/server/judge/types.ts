@@ -5,7 +5,7 @@ export type JudgeSession = {
   sessionToken: string;
   expiresAt: string;
   remainingCalls: 1;
-  mode: "LIVE_CALLE";
+  mode: "LIVE_CALLE" | "MOCK";
 };
 export type CreateJudgeSessionRequest = {
   accessCode: string;
@@ -22,8 +22,8 @@ export type StartManagerCallRequest = {
 export type StartManagerCallResponse = {
   runId: string;
   callTaskId: string;
-  status: "QUEUED" | "CALLING";
-  runtime: "LIVE_CALLE";
+  status: "PENDING" | "QUEUED" | "CALLING" | "COMPLETED" | "FAILED";
+  runtime: "LIVE_CALLE" | "MOCK";
 };
 
 export type JudgeRunStatus = {
