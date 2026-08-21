@@ -10,6 +10,11 @@ import {
   type WorkflowInput,
   type WorkflowResult,
 } from "../server/workflow";
+import {
+  createAuditChain,
+  createSignedDecisionProof,
+  sha256,
+} from "../security";
 
 const suppliers: SupplierContact[] = [
   {
@@ -94,5 +99,40 @@ export async function runDemoWorkflow(
     new MockPurchaseOrderAdapter(),
   );
 
-  return workflow.run(createInput(autonomousExecutionEnabled));
+  const input = createInput(autonomousExecutionEnabled);
+  const result = await workflow.run(input);
+
+  if (!result.proof || !result.decision?.selectedOffer || !result.decision.validation) {
+    return result;
+  }
+
+  const allOffers = [
+    result.decision.selectedOffer,
+    ...result.decision.rejectedOffers.map(({ offer }) => offer),
+  ];
+  const offerHashes = Object.fromEntries(
+    await Promise.all(
+      allOffers.map(async (offer) => [offer.supplierId, await sha256(offer)]),
+    ),
+  );
+  const auditChain = await createAuditChain(result.auditTimeline);
+
+  result.signedProof = await createSignedDecisionProof({
+    workflowId: result.workflowId,
+    generatedAt: result.auditTimeline.at(-1)?.at ?? new Date().toISOString(),
+    policyVersion: input.procurementPolicy.version,
+    policyHash: await sha256(input.procurementPolicy),
+    offerHashes,
+    selectedSupplierId: result.proof.selectedSupplierId,
+    selectedOfferId: result.proof.selectedOfferId,
+    passedChecks: result.proof.passedChecks,
+    rejectedSuppliers: result.decision.rejectedOffers.map(({ offer, validation }) => ({
+      supplierId: offer.supplierId,
+      failedChecks: validation.failedCheckIds,
+    })),
+    orderValueEur: result.proof.orderValueEur,
+    auditChain,
+  });
+
+  return result;
 }
