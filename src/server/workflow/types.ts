@@ -12,6 +12,7 @@ import type {
 } from "../calle";
 import type { SignedDecisionProof } from "../../security";
 import type { WorkflowState, WorkflowStateEvent } from "./stateMachine";
+import type { ManagerEscalationRecord } from "../escalation/types";
 
 export type SupplierContact = {
   supplierId: string;
@@ -47,6 +48,12 @@ export type AuditEvent = {
     | "POLICY_PASSED"
     | "PURCHASE_ORDER_CREATED"
     | "HUMAN_EXCEPTION_REQUIRED"
+    | "NO_COMPLIANT_OFFER"
+    | "MANAGER_ESCALATION_STARTED"
+    | "MANAGER_CALL_COMPLETED"
+    | "MANAGER_DECISION_RECORDED"
+    | "AUTHENTICATED_APPROVAL_REQUIRED"
+    | "MANAGER_ESCALATION_FAILED"
     | "NO_ACTION_REQUIRED"
     | "DUPLICATE_RUN_BLOCKED"
     | "WORKFLOW_CANCELLED"
@@ -82,12 +89,13 @@ export interface PurchaseOrderPort {
 export type DecisionProof = {
   workflowId: string;
   policyVersion: string;
-  selectedSupplierId: string;
-  selectedOfferId: string;
+  selectedSupplierId: string | null;
+  selectedOfferId: string | null;
   passedChecks: string[];
   rejectedSupplierIds: string[];
-  orderValueEur: number;
+  orderValueEur: number | null;
   explanation: string;
+  managerEscalation: ManagerEscalationRecord | null;
   ruleTrace: Array<{
     supplierId: string;
     checks: Array<{
@@ -104,12 +112,16 @@ export type WorkflowResult = {
   status:
     | "ORDER_CREATED"
     | "HUMAN_EXCEPTION_REQUIRED"
+    | "HUMAN_ESCALATION_REQUIRED"
+    | "ESCALATION_RECORDED"
+    | "AUTHENTICATED_APPROVAL_REQUIRED"
     | "NO_ACTION_REQUIRED"
     | "EXECUTION_BLOCKED"
     | "FAILED";
   decision: ProcurementDecision | null;
   purchaseOrder: PurchaseOrder | null;
   proof: DecisionProof | null;
+  managerEscalation?: ManagerEscalationRecord | null;
   auditTimeline: AuditEvent[];
   signedProof?: SignedDecisionProof;
   workflowState: WorkflowState;
