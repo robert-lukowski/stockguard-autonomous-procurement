@@ -47,8 +47,25 @@ function offer(overrides: Partial<SupplierOffer> = {}): SupplierOffer {
     unitPrice: 42,
     currency: "EUR",
     deliveryAt: "2026-08-27T10:00:00+02:00",
+    offerValidUntil: "2099-08-22T16:00:00+02:00",
     commercialTermsChanged: false,
     evidenceComplete: true,
+    evidenceStatus: {
+      skuConfirmed: "VERIFIED",
+      availableQuantity: "VERIFIED",
+      unitPrice: "VERIFIED",
+      currency: "VERIFIED",
+      deliveryAt: "VERIFIED",
+      offerValidUntil: "VERIFIED",
+      commercialTermsChanged: "VERIFIED",
+    },
+    evidenceByField: {
+      unitPrice: {
+        source: "transcript",
+        excerpt: "The unit price is forty-two euros.",
+        verified: true,
+      },
+    },
     completionConfidence: 0.96,
     attemptCount: 1,
     ...overrides,
@@ -97,15 +114,14 @@ describe("validateOffer", () => {
     );
 
     expect(result.status).toBe("ORDER_APPROVED");
-    expect(result.validation?.checks).toHaveLength(12);
+    expect(result.validation?.checks).toHaveLength(13);
     expect(result.validation?.failedCheckIds).toEqual([]);
   });
 
   it.each([
     ["unapproved supplier", { approvedSupplier: false }, "approved_supplier"],
     ["late delivery", { deliveryAt: "2026-08-31T10:00:00+02:00" }, "delivery_before_stockout"],
-    ["new terms", { commercialTermsChanged: true }, "commercial_terms_unchanged"],
-    ["low confidence", { completionConfidence: 0.71 }, "confidence_threshold"],
+    ["expired offer", { offerValidUntil: "2020-01-01T00:00:00Z" }, "offer_validity"],
   ] as const)("blocks %s", (_label, overrides, expectedCheck) => {
     const candidate = offer(overrides);
     const normalized = {
@@ -117,6 +133,23 @@ describe("validateOffer", () => {
     expect(
       validateOffer(normalized, forecast, policy).failedCheckIds,
     ).toContain(expectedCheck);
+  });
+
+  it.each([
+    ["new terms", { commercialTermsChanged: true }, "commercial_terms_unchanged"],
+    ["low confidence", { completionConfidence: 0.71 }, "confidence_threshold"],
+    ["unverified price", { evidenceComplete: false, evidenceStatus: { ...offer().evidenceStatus, unitPrice: "UNVERIFIED" as const } }, "unit_price_within_ceiling"],
+  ] as const)("requires human review for %s", (_label, overrides, expectedCheck) => {
+    const candidate = offer(overrides);
+    const normalized = {
+      ...candidate,
+      unitPriceEur: candidate.unitPrice,
+      totalPriceEur: candidate.unitPrice * candidate.availableQuantity,
+    };
+    const result = validateOffer(normalized, forecast, policy);
+
+    expect(result.decision).toBe("REQUIRES_HUMAN");
+    expect(result.humanReviewCheckIds).toContain(expectedCheck);
   });
 });
 

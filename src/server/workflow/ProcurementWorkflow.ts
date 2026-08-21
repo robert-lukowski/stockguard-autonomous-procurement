@@ -27,14 +27,35 @@ function resultToOffer(
   sku: string,
 ): SupplierOffer {
   const result = task.structuredResult;
-  const requiredFieldsPresent =
+  const evidenceFields = [
+    "skuConfirmed",
+    "availableQuantity",
+    "unitPrice",
+    "currency",
+    "deliveryAt",
+    "offerValidUntil",
+    "commercialTermsChanged",
+  ] as const;
+  const evidenceStatus = Object.fromEntries(
+    evidenceFields.map((field) => [
+      field,
+      result?.[field] === null || result?.[field] === undefined
+        ? "NOT_PROVIDED"
+        : task.fieldEvidence[field]?.verified
+          ? "VERIFIED"
+          : "UNVERIFIED",
+    ]),
+  ) as SupplierOffer["evidenceStatus"];
+  const requiredFieldsVerified =
     task.taskCompleted &&
+    task.schemaValidation.valid &&
     result !== null &&
     result.availableQuantity !== null &&
     result.unitPrice !== null &&
     result.currency !== null &&
     result.deliveryAt !== null &&
-    !result.optOutRequested;
+    !result.optOutRequested &&
+    evidenceFields.every((field) => evidenceStatus[field] === "VERIFIED");
 
   return {
     offerId: `${workflowId}:${supplier.supplierId}`,
@@ -49,8 +70,11 @@ function resultToOffer(
     unitPrice: result?.unitPrice ?? 0,
     currency: result?.currency ?? "EUR",
     deliveryAt: result?.deliveryAt ?? "9999-12-31T23:59:59Z",
+    offerValidUntil: result?.offerValidUntil ?? null,
     commercialTermsChanged: result?.commercialTermsChanged ?? true,
-    evidenceComplete: requiredFieldsPresent,
+    evidenceComplete: requiredFieldsVerified,
+    evidenceStatus,
+    evidenceByField: task.fieldEvidence,
     completionConfidence: task.completionConfidence ?? 0,
     attemptCount: 1,
   };
@@ -200,6 +224,7 @@ export class ProcurementWorkflow {
       forecast,
       input.procurementPolicy,
       input.exchangeRates,
+      this.clock().toISOString(),
     );
     stateMachine.transition("POLICY_CHECK", "Deterministic procurement rules evaluated");
 
@@ -210,6 +235,7 @@ export class ProcurementWorkflow {
         {
           supplierId: rejected.offer.supplierId,
           failedChecks: rejected.validation.failedCheckIds.join(","),
+          requiresHuman: rejected.validation.humanReviewCheckIds.join(","),
         },
       );
     }
@@ -292,6 +318,26 @@ export class ProcurementWorkflow {
       ),
       orderValueEur: purchaseOrder.totalPriceEur,
       explanation: decision.reason,
+      ruleTrace: [
+        {
+          supplierId: decision.selectedOffer.supplierId,
+          checks: decision.validation.checks.map(({ id, status, evidence, inputs }) => ({
+            id,
+            status,
+            evidence,
+            inputs,
+          })),
+        },
+        ...decision.rejectedOffers.map(({ offer, validation }) => ({
+          supplierId: offer.supplierId,
+          checks: validation.checks.map(({ id, status, evidence, inputs }) => ({
+            id,
+            status,
+            evidence,
+            inputs,
+          })),
+        })),
+      ],
     };
 
     return finish({

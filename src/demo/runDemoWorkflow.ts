@@ -141,6 +141,11 @@ function failedTask(status: "failed" | "completed", evidence: string): SupplierC
     completionConfidence: 0,
     structuredResult: null,
     evidence: [evidence],
+    fieldEvidence: {},
+    schemaValidation: {
+      valid: false,
+      issues: [{ field: "$", message: "No structured quote was received" }],
+    },
   };
 }
 
@@ -224,6 +229,11 @@ export async function runDemoWorkflow(
       allOffers.map(async (offer) => [offer.supplierId, await sha256(offer)]),
     ),
   );
+  const evidenceHashes = Object.fromEntries(
+    await Promise.all(
+      allOffers.map(async (offer) => [offer.supplierId, await sha256(offer.evidenceByField)]),
+    ),
+  );
   const auditChain = await createAuditChain(result.auditTimeline);
 
   result.signedProof = await createSignedDecisionProof({
@@ -232,13 +242,16 @@ export async function runDemoWorkflow(
     policyVersion: input.procurementPolicy.version,
     policyHash: await sha256(input.procurementPolicy),
     offerHashes,
+    evidenceHashes,
     selectedSupplierId: result.proof.selectedSupplierId,
     selectedOfferId: result.proof.selectedOfferId,
     passedChecks: result.proof.passedChecks,
     rejectedSuppliers: result.decision.rejectedOffers.map(({ offer, validation }) => ({
       supplierId: offer.supplierId,
       failedChecks: validation.failedCheckIds,
+      requiresHumanChecks: validation.humanReviewCheckIds,
     })),
+    ruleTrace: result.proof.ruleTrace,
     orderValueEur: result.proof.orderValueEur,
     auditChain,
   });

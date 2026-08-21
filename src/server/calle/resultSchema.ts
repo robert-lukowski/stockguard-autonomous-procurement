@@ -26,8 +26,12 @@ export const supplierCallResultSchema = {
         { type: "null" },
       ],
     },
-    deliveryAt: { type: ["string", "null"] },
-    offerValidUntil: { type: ["string", "null"] },
+    deliveryAt: {
+      anyOf: [{ type: "string", format: "date-time" }, { type: "null" }],
+    },
+    offerValidUntil: {
+      anyOf: [{ type: "string", format: "date-time" }, { type: "null" }],
+    },
     commercialTermsChanged: { type: "boolean" },
     optOutRequested: { type: "boolean" },
     notes: { type: ["string", "null"] },

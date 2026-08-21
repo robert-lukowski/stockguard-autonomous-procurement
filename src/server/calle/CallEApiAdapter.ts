@@ -1,4 +1,5 @@
 import { supplierCallResultSchema } from "./resultSchema";
+import { validateSupplierCallResult } from "./validateStructuredResult";
 import { CallSafetyError, validateCallAuthorization } from "./safety";
 import type {
   CallAuthorization,
@@ -25,6 +26,7 @@ type CallEApiResponse = {
   completion_confidence?: { score?: number } | number | null;
   structured_result?: SupplierCallStructuredResult | null;
   evidence?: string[];
+  field_evidence?: SupplierCallTask["fieldEvidence"];
 };
 
 function mapTask(response: CallEApiResponse): SupplierCallTask {
@@ -36,14 +38,20 @@ function mapTask(response: CallEApiResponse): SupplierCallTask {
     typeof rawConfidence === "number"
       ? rawConfidence
       : rawConfidence?.score ?? null;
+  const validation = validateSupplierCallResult(response.structured_result);
 
   return {
     callId,
     status: response.status ?? "queued",
     taskCompleted: response.task_completed ?? false,
     completionConfidence,
-    structuredResult: response.structured_result ?? null,
+    structuredResult: validation.result,
     evidence: response.evidence ?? [],
+    fieldEvidence: response.field_evidence ?? {},
+    schemaValidation: {
+      valid: validation.valid,
+      issues: validation.issues,
+    },
   };
 }
 

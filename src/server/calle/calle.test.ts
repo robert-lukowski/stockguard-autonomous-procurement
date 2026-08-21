@@ -42,6 +42,11 @@ describe("MockCallEAdapter", () => {
       availableQuantity: 8,
       currency: "EUR",
     });
+    expect(result.schemaValidation).toMatchObject({ valid: true, issues: [] });
+    expect(result.fieldEvidence.unitPrice).toMatchObject({
+      verified: true,
+      source: "transcript",
+    });
   });
 
   it("blocks a number outside the approved allowlist", async () => {
@@ -113,6 +118,45 @@ describe("CallEApiAdapter", () => {
     expect(body.recipient_result_schema.required).toContain("unitPrice");
     expect(options.headers["Idempotency-Key"]).toBe(
       "wf-2026-081:supplier-de-01",
+    );
+  });
+
+  it("quarantines an invalid structured result from the policy workflow", async () => {
+    const fetchImplementation = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          call_id: "call-invalid-01",
+          status: "completed",
+          task_completed: true,
+          structured_result: {
+            supplierId: "supplier-de-01",
+            language: "de-DE",
+            skuConfirmed: true,
+            availableQuantity: 8,
+            unitPrice: 42,
+            currency: "INVALID",
+            deliveryAt: "not-a-date",
+            offerValidUntil: null,
+            commercialTermsChanged: false,
+            optOutRequested: false,
+            notes: null,
+          },
+        }),
+        { status: 200 },
+      ),
+    );
+    const adapter = new CallEApiAdapter({
+      apiKey: "test-only",
+      realCallsEnabled: true,
+      fetchImplementation,
+    });
+
+    const result = await adapter.startSupplierCall(request, authorization);
+
+    expect(result.schemaValidation.valid).toBe(false);
+    expect(result.structuredResult).toBeNull();
+    expect(result.schemaValidation.issues.map(({ field }) => field)).toEqual(
+      expect.arrayContaining(["currency", "deliveryAt"]),
     );
   });
 });

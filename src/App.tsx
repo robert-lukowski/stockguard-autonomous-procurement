@@ -95,7 +95,7 @@ const steps: WorkflowStep[] = [
   },
   {
     label: "Policy validation",
-    detail: "12 of 12 machine-enforced checks passed",
+    detail: "13 of 13 machine-enforced checks passed",
     status: "complete",
   },
   {
@@ -113,6 +113,7 @@ const checks = [
   "Price below ceiling",
   "Budget available",
   "Approved currency",
+  "Offer validity confirmed",
   "No new commercial terms",
   "Evidence complete",
   "Confidence above 90%",
@@ -184,6 +185,10 @@ function App() {
               ? "active"
               : "pending",
         }));
+  const displayedValidation =
+    demoResult?.decision?.validation ??
+    demoResult?.decision?.rejectedOffers[0]?.validation ??
+    null;
 
   return (
     <div className="app-shell">
@@ -428,12 +433,19 @@ function App() {
             <div className="panel-heading">
               <div>
                 <span className="section-kicker">Independent validation agent</span>
-                <h2>{demoResult?.proof ? `${demoResult.proof.passedChecks.length} / 12 policy checks passed` : "Validation awaiting workflow"}</h2>
+                <h2>{displayedValidation ? `${displayedValidation.checks.filter(({ status }) => status === "PASS").length} / ${displayedValidation.checks.length} policy checks passed` : "Validation awaiting workflow"}</h2>
               </div>
-              <div className="validation-score"><ShieldCheck size={20} /> {demoResult?.proof ? "PASS" : "READY"}</div>
+              <div className={`validation-score ${displayedValidation?.decision.toLowerCase() ?? "ready"}`}><ShieldCheck size={20} /> {displayedValidation?.decision ?? "READY"}</div>
             </div>
             <div className="checks-grid">
-              {checks.map((check) => <div key={check}><BadgeCheck size={16} /> {check}</div>)}
+              {displayedValidation
+                ? displayedValidation.checks.map((check) => (
+                    <div className={`rule-check ${check.status.toLowerCase().replace("_", "-")}`} title={check.evidence} key={check.id}>
+                      {check.status === "PASS" ? <BadgeCheck size={16} /> : <TriangleAlert size={16} />}
+                      <span>{check.id.replaceAll("_", " ")}<small>{check.status}</small></span>
+                    </div>
+                  ))
+                : checks.map((check) => <div key={check}><BadgeCheck size={16} /> {check}</div>)}
             </div>
           </article>
 
