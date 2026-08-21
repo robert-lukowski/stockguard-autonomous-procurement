@@ -15,7 +15,12 @@ import {
   Truck,
 } from "lucide-react";
 import { useState } from "react";
-import { runDemoWorkflow } from "./demo/runDemoWorkflow";
+import {
+  guidedScenario,
+  runDemoWorkflow,
+  type DemoCallOutcome,
+  type DemoScenario,
+} from "./demo/runDemoWorkflow";
 import type { WorkflowResult } from "./server/workflow";
 import { verifyDecisionProof, type ProofVerification } from "./security";
 
@@ -126,6 +131,8 @@ function App() {
   >("idle");
   const [demoResult, setDemoResult] = useState<WorkflowResult | null>(null);
   const [proofVerification, setProofVerification] = useState<ProofVerification | null>(null);
+  const [labMode, setLabMode] = useState<"guided" | "custom">("guided");
+  const [scenario, setScenario] = useState<DemoScenario>(structuredClone(guidedScenario));
 
   const runDemo = async () => {
     setDemoStatus("running");
@@ -133,8 +140,8 @@ function App() {
     setProofVerification(null);
 
     try {
-      await new Promise((resolve) => window.setTimeout(resolve, 650));
-      const result = await runDemoWorkflow(autonomyEnabled);
+      const selectedScenario = labMode === "guided" ? guidedScenario : scenario;
+      const result = await runDemoWorkflow(autonomyEnabled, selectedScenario);
       setDemoResult(result);
       if (result.signedProof) {
         setProofVerification(await verifyDecisionProof(result.signedProof));
@@ -145,6 +152,13 @@ function App() {
     } catch {
       setDemoStatus("error");
     }
+  };
+
+  const setSupplierOutcome = (supplierId: string, outcome: DemoCallOutcome) => {
+    setScenario((current) => ({
+      ...current,
+      supplierOutcomes: { ...current.supplierOutcomes, [supplierId]: outcome },
+    }));
   };
 
   const verifyOriginalProof = async () => {
@@ -211,7 +225,7 @@ function App() {
               onClick={runDemo}
             >
               <Sparkles size={16} />
-              {demoStatus === "running" ? "Running workflow…" : "Run autonomous demo"}
+              {demoStatus === "running" ? "Running workflow…" : labMode === "guided" ? "Run Guided Demo" : "Run Custom Scenario"}
             </button>
             <div className="kill-switch">
               <div>
@@ -230,6 +244,50 @@ function App() {
             <button className="avatar" aria-label="Open user menu">RL</button>
           </div>
         </header>
+
+        <section className="panel judge-lab-panel">
+          <div className="lab-header">
+            <div>
+              <span className="section-kicker">Interactive Judge Lab</span>
+              <h2>Control the procurement outcome</h2>
+              <p>Public sandbox · synthetic calls · no phone number or secret required</p>
+            </div>
+            <div className="runtime-badge mock">MOCK RUNTIME</div>
+          </div>
+
+          <div className="lab-mode-switch" role="tablist" aria-label="Demo mode">
+            <button className={labMode === "guided" ? "active" : ""} onClick={() => setLabMode("guided")}>Guided Demo</button>
+            <button className={labMode === "custom" ? "active" : ""} onClick={() => setLabMode("custom")}>Custom Scenario</button>
+            <button disabled title="Requires server-side authorization and configured CALL-E backend">Judge Mode · backend locked</button>
+          </div>
+
+          {labMode === "custom" && (
+            <div className="scenario-controls">
+              <label>Required quantity<input type="number" min="1" max="40" value={scenario.requiredQuantity} onChange={(event) => setScenario({ ...scenario, requiredQuantity: Number(event.target.value) })} /></label>
+              <label>Autonomy budget (€)<input type="number" min="50" max="5000" value={scenario.budgetEur} onChange={(event) => setScenario({ ...scenario, budgetEur: Number(event.target.value) })} /></label>
+              <label>Stockout deadline<input type="datetime-local" value={scenario.stockoutAt.slice(0, 16)} onChange={(event) => setScenario({ ...scenario, stockoutAt: `${event.target.value}:00+02:00` })} /></label>
+              <label>NordWerk quantity<input type="number" min="0" max="40" value={scenario.primaryOfferQuantity} onChange={(event) => setScenario({ ...scenario, primaryOfferQuantity: Number(event.target.value) })} /></label>
+              <label>NordWerk unit price (€)<input type="number" min="1" max="200" value={scenario.primaryOfferUnitPriceEur} onChange={(event) => setScenario({ ...scenario, primaryOfferUnitPriceEur: Number(event.target.value) })} /></label>
+              {[
+                ["supplier-de-01", "NordWerk · DE"],
+                ["supplier-fr-01", "Atlas · FR"],
+                ["supplier-pl-01", "PolStock · PL"],
+              ].map(([supplierId, label]) => (
+                <label key={supplierId}>{label}
+                  <select value={scenario.supplierOutcomes[supplierId]} onChange={(event) => setSupplierOutcome(supplierId, event.target.value as DemoCallOutcome)}>
+                    <option value="quote">Complete quote</option>
+                    <option value="no-answer">No answer</option>
+                    <option value="voicemail">Voicemail</option>
+                    <option value="incomplete">Incomplete quote</option>
+                    <option value="late">Late delivery</option>
+                    <option value="expensive">Above price ceiling</option>
+                  </select>
+                </label>
+              ))}
+            </div>
+          )}
+          <div className="judge-mode-note"><ShieldCheck size={16} /><span><strong>Live Judge Mode is fail-closed.</strong> Access-code validation, consent, phone submission and CALL-E execution will only be enabled through the future backend; no valid code exists in this frontend bundle.</span></div>
+        </section>
 
         <section className="metrics" aria-label="Workflow metrics">
           <article>
@@ -299,7 +357,13 @@ function App() {
             </div>
 
             <div className="timeline">
-              {displayedSteps.map((step, index) => (
+              {demoResult?.stateHistory ? demoResult.stateHistory.slice(-7).map((event) => (
+                <div className={`timeline-step ${event.to === demoResult.workflowState ? "active" : "complete"}`} key={event.sequence}>
+                  <div className="timeline-marker"><BadgeCheck size={18} /></div>
+                  <div><strong>{event.to.replaceAll("_", " ")}</strong><span>{event.reason}</span></div>
+                  <time>#{event.sequence}</time>
+                </div>
+              )) : displayedSteps.map((step, index) => (
                 <div className={`timeline-step ${step.status}`} key={step.label}>
                   <div className="timeline-marker">
                     {step.status === "complete" ? <BadgeCheck size={18} /> : <PackageCheck size={18} />}

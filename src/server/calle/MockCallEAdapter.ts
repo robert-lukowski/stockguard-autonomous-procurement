@@ -7,7 +7,7 @@ import type {
 } from "./types";
 import { validateCallAuthorization } from "./safety";
 
-type MockSupplierResult = Omit<
+export type MockSupplierResult = Omit<
   SupplierCallStructuredResult,
   "supplierId" | "language"
 >;
@@ -51,16 +51,25 @@ const mockResults: Record<string, MockSupplierResult> = {
 export class MockCallEAdapter implements SupplierCallingPort {
   private readonly tasks = new Map<string, SupplierCallTask>();
 
+  constructor(
+    private readonly results: Record<string, MockSupplierResult | SupplierCallTask> = mockResults,
+  ) {}
+
   async startSupplierCall(
     request: SupplierCallRequest,
     authorization: CallAuthorization,
   ): Promise<SupplierCallTask> {
     validateCallAuthorization(request, authorization);
 
-    const result = mockResults[request.supplierId];
+    const result = this.results[request.supplierId];
     if (!result) throw new Error(`No mock result for ${request.supplierId}`);
 
     const callId = `mock-${request.workflowId}-${request.supplierId}`;
+    if ("callId" in result) {
+      const configuredTask = { ...result, callId };
+      this.tasks.set(callId, configuredTask);
+      return configuredTask;
+    }
     const task: SupplierCallTask = {
       callId,
       status: "completed",

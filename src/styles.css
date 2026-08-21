@@ -89,6 +89,25 @@ p { color: var(--muted); margin: 5px 0 0; font-size: 13px; }
 .avatar { width: 40px; height: 40px; border: 0; border-radius: 11px; background: #dbe9e2; color: var(--green-dark); font-weight: 800; }
 
 .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 13px; margin-bottom: 14px; }
+.judge-lab-panel { margin-bottom: 14px; }
+.lab-header { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; }
+.runtime-badge { border-radius: 30px; padding: 6px 10px; font-size: 9px; font-weight: 800; letter-spacing: .06em; }
+.runtime-badge.mock { color: #53615b; background: #edf1ef; border: 1px solid #d7dfda; }
+.lab-mode-switch { display: flex; gap: 7px; margin-top: 15px; }
+.lab-mode-switch button {
+  border: 1px solid var(--line); background: #fff; color: #586760; border-radius: 8px;
+  padding: 8px 11px; font-size: 10px; font-weight: 700; cursor: pointer;
+}
+.lab-mode-switch button.active { color: #fff; background: var(--green); border-color: var(--green); }
+.lab-mode-switch button:disabled { cursor: not-allowed; color: #9aa69f; background: #f3f5f4; }
+.scenario-controls { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.scenario-controls label { color: var(--muted); font-size: 9px; font-weight: 700; }
+.scenario-controls input, .scenario-controls select {
+  display: block; width: 100%; margin-top: 5px; border: 1px solid var(--line); border-radius: 8px;
+  background: #fbfcfb; color: var(--ink); padding: 8px 9px; font: 600 10px "DM Sans", sans-serif;
+}
+.judge-mode-note { display: flex; align-items: center; gap: 8px; color: #596961; background: #f4f7f5; border-radius: 9px; padding: 9px 11px; margin-top: 12px; font-size: 9px; }
+.judge-mode-note svg { color: var(--green); flex: 0 0 auto; }
 .metrics article {
   display: flex; align-items: center; gap: 12px; padding: 16px;
   background: var(--panel); border: 1px solid var(--line); border-radius: 13px;
@@ -231,6 +250,7 @@ footer { display: flex; justify-content: space-between; color: #819089; font-siz
   .topbar { display: block; }
   .topbar-actions { margin-top: 14px; }
   .metrics, .content-grid, .lower-grid { grid-template-columns: 1fr; }
+  .scenario-controls { grid-template-columns: 1fr 1fr; }
   .stock-equation { grid-template-columns: repeat(3, 1fr); }
   .operator { display: none; }
   .checks-grid { grid-template-columns: repeat(2, 1fr); }
