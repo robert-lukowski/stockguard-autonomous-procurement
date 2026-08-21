@@ -66,7 +66,12 @@ export class JudgeModeBackendClient {
   async getRunStatus(session: JudgeSession, runId: string): Promise<JudgeRunStatus> {
     const response = await this.fetchImplementation(
       this.endpoint(`/judge/runs/${encodeURIComponent(runId)}`),
-      { headers: { Authorization: `Bearer ${session.sessionToken}` } },
+      {
+        headers: {
+          Authorization: `Bearer ${session.sessionToken}`,
+          "X-Judge-Session": session.sessionId,
+        },
+      },
     );
     if (!response.ok) throw new Error(`Judge run lookup failed with HTTP ${response.status}`);
     return (await response.json()) as JudgeRunStatus;

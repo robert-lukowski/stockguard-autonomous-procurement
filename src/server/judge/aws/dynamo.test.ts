@@ -28,6 +28,7 @@ class QueueDynamoClient implements DynamoDocumentPort {
 
 const session: StoredJudgeSession = {
   sessionId: "session-1",
+  runId: "run-1",
   tokenHash: "token-hash",
   issuedAt: "2026-08-21T10:00:00Z",
   expiresAt: "2026-08-21T10:15:00Z",

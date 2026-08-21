@@ -14,6 +14,11 @@ export class InMemoryJudgeSessionStore implements JudgeSessionStore {
     this.sessions.set(session.sessionId, structuredClone(session));
   }
 
+  async getSession(sessionId: string): Promise<StoredJudgeSession | null> {
+    const session = this.sessions.get(sessionId);
+    return session ? structuredClone(session) : null;
+  }
+
   async claimCall(input: CallClaimInput): Promise<CallClaimResult> {
     const session = this.sessions.get(input.sessionId);
     if (!session) return { kind: "NOT_FOUND" };

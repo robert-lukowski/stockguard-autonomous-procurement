@@ -53,6 +53,7 @@ export function createJudgeHandlers(
 ): {
   createSession(event: ApiGatewayRequest): Promise<ApiGatewayResponse>;
   startManagerCall(event: ApiGatewayRequest): Promise<ApiGatewayResponse>;
+  getRunStatus(event: ApiGatewayRequest): Promise<ApiGatewayResponse>;
   ingestWebhook(event: ApiGatewayRequest): Promise<ApiGatewayResponse>;
 } {
   return {
@@ -103,6 +104,25 @@ export function createJudgeHandlers(
           request,
         );
         return jsonResponse(result.status === "COMPLETED" ? 200 : 202, result);
+      } catch (error) {
+        return error instanceof JudgeBackendError
+          ? backendErrorResponse(error)
+          : jsonResponse(500, { error: "INTERNAL_ERROR" });
+      }
+    },
+
+    async getRunStatus(event) {
+      const runId = event.pathParameters?.runId;
+      const sessionId = event.headers["x-judge-session"] ?? event.headers["X-Judge-Session"];
+      const sessionToken = bearerToken(event.headers);
+      if (!runId || !sessionId || !sessionToken) {
+        return jsonResponse(400, { error: "INVALID_REQUEST" });
+      }
+      try {
+        return jsonResponse(
+          200,
+          await backend.getRunStatus(sessionId, sessionToken, runId),
+        );
       } catch (error) {
         return error instanceof JudgeBackendError
           ? backendErrorResponse(error)

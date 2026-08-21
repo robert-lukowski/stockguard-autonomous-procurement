@@ -27,6 +27,7 @@ function sessionKey(sessionId: string): Record<string, string> {
 function toSession(item: Record<string, unknown>): StoredJudgeSession {
   return {
     sessionId: String(item.sessionId),
+    runId: String(item.runId),
     tokenHash: String(item.tokenHash),
     issuedAt: String(item.issuedAt),
     expiresAt: String(item.expiresAt),
@@ -62,7 +63,7 @@ export class DynamoJudgeSessionStore implements JudgeSessionStore {
     private readonly tableName: string,
   ) {}
 
-  private async get(sessionId: string): Promise<StoredJudgeSession | null> {
+  async getSession(sessionId: string): Promise<StoredJudgeSession | null> {
     const result = await this.client.execute({
       operation: "Get",
       tableName: this.tableName,
@@ -88,7 +89,7 @@ export class DynamoJudgeSessionStore implements JudgeSessionStore {
   }
 
   async claimCall(input: CallClaimInput): Promise<CallClaimResult> {
-    const current = await this.get(input.sessionId);
+    const current = await this.getSession(input.sessionId);
     const classified = classifySession(current, input);
     if (classified) return classified;
     if (!current) return { kind: "NOT_FOUND" };
@@ -127,7 +128,7 @@ export class DynamoJudgeSessionStore implements JudgeSessionStore {
       });
     } catch (error) {
       if (!(error instanceof DynamoConditionalCheckFailed)) throw error;
-      return classifySession(await this.get(input.sessionId), input) ?? {
+      return classifySession(await this.getSession(input.sessionId), input) ?? {
         kind: "CONSUMED",
       };
     }

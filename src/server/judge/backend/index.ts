@@ -5,6 +5,10 @@ export {
 } from "./accessCode";
 export { JudgeBackendError, JudgeBackendService } from "./JudgeBackendService";
 export {
+  canonicalJudgeEscalationContext,
+  SyntheticJudgeRunPreparer,
+} from "./judgeRun";
+export {
   FixedWindowRateLimiter,
   InMemoryGlobalCallBudget,
   InMemoryJudgeSessionStore,
@@ -26,7 +30,10 @@ export type {
   GlobalCallBudget,
   GlobalKillSwitch,
   JudgeBackendDependencies,
+  JudgeRunPreparationPort,
   JudgeSessionStore,
+  ManagerResultReader,
+  PreparedJudgeRun,
   SessionRateLimiter,
   StoredCallClaim,
   StoredJudgeSession,
