@@ -286,12 +286,21 @@ function App() {
                     <option value="incomplete">Incomplete quote</option>
                     <option value="late">Late delivery</option>
                     <option value="expensive">Above price ceiling</option>
+                    <option value="missing-webhook">Missing webhook</option>
+                    <option value="connection-lost">Connection lost</option>
                   </select>
                 </label>
               ))}
             </div>
           )}
           <div className="judge-mode-note"><ShieldCheck size={16} /><span><strong>Live Judge Mode is fail-closed.</strong> Access-code validation, consent, phone submission and CALL-E execution will only be enabled through the future backend; no valid code exists in this frontend bundle.</span></div>
+          <div className="resilience-badges" aria-label="Execution safeguards">
+            <span>Idempotent run</span>
+            <span>Webhook dedupe</span>
+            <span>2-attempt retry cap</span>
+            <span>Exactly-once synthetic PO</span>
+            <span>Timeout → human review</span>
+          </div>
         </section>
 
         <section className="metrics" aria-label="Workflow metrics">

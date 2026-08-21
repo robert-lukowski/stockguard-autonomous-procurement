@@ -65,7 +65,7 @@ export class MockCallEAdapter implements SupplierCallingPort {
     const result = this.results[request.supplierId];
     if (!result) throw new Error(`No mock result for ${request.supplierId}`);
 
-    const callId = `mock-${request.workflowId}-${request.supplierId}`;
+    const callId = `mock-${request.workflowId}-${request.supplierId}-attempt-${request.attemptNumber}`;
     if ("callId" in result) {
       const configuredTask = { ...result, callId };
       this.tasks.set(callId, configuredTask);
@@ -114,6 +114,7 @@ export class MockCallEAdapter implements SupplierCallingPort {
         valid: validation.valid,
         issues: validation.issues,
       },
+      outcome: "ANSWERED",
     };
 
     this.tasks.set(callId, task);

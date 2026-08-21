@@ -4,12 +4,15 @@ import {
   type SupplierOffer,
 } from "../../domain";
 import type {
+  CallAuthorization,
   SupplierCallingPort,
+  SupplierCallRequest,
   SupplierCallTask,
 } from "../calle";
 import type {
   AuditEvent,
   DecisionProof,
+  PurchaseOrder,
   PurchaseOrderPort,
   SupplierContact,
   WorkflowInput,
@@ -17,6 +20,13 @@ import type {
 } from "./types";
 import { toSupplierCallRequest } from "./types";
 import { ProcurementStateMachine, type WorkflowStateEvent } from "./stateMachine";
+import {
+  defaultCallExecutionPolicy,
+  InMemoryWorkflowRunStore,
+  withTimeout,
+  type CallExecutionPolicy,
+  type WorkflowRunStore,
+} from "./resilience";
 
 type Clock = () => Date;
 
@@ -25,6 +35,7 @@ function resultToOffer(
   task: SupplierCallTask,
   workflowId: string,
   sku: string,
+  attemptCount: number,
 ): SupplierOffer {
   const result = task.structuredResult;
   const evidenceFields = [
@@ -76,7 +87,28 @@ function resultToOffer(
     evidenceStatus,
     evidenceByField: task.fieldEvidence,
     completionConfidence: task.completionConfidence ?? 0,
-    attemptCount: 1,
+    attemptCount,
+  };
+}
+
+function unresolvedTask(
+  callId: string,
+  outcome: "TIMEOUT" | "FAILED",
+  message: string,
+): SupplierCallTask {
+  return {
+    callId,
+    status: "failed",
+    taskCompleted: false,
+    completionConfidence: 0,
+    structuredResult: null,
+    evidence: [message],
+    fieldEvidence: {},
+    schemaValidation: {
+      valid: false,
+      issues: [{ field: "$", message }],
+    },
+    outcome,
   };
 }
 
@@ -86,7 +118,77 @@ export class ProcurementWorkflow {
     private readonly purchaseOrders: PurchaseOrderPort,
     private readonly clock: Clock = () => new Date(),
     private readonly stateObserver?: (event: WorkflowStateEvent) => void,
+    private readonly runStore: WorkflowRunStore = new InMemoryWorkflowRunStore(),
+    private readonly callPolicy: CallExecutionPolicy = defaultCallExecutionPolicy,
   ) {}
+
+  private async executeSupplierCall(
+    request: SupplierCallRequest,
+    authorization: CallAuthorization,
+    onRetry: (attempt: number, outcome: SupplierCallTask["outcome"]) => void,
+  ): Promise<{ task: SupplierCallTask; attemptCount: number }> {
+    const maximumAttempts = Math.min(
+      authorization.maximumCalls,
+      this.callPolicy.maximumAttempts,
+    );
+    let lastTask = unresolvedTask(
+      `unresolved-${request.workflowId}-${request.supplierId}`,
+      "FAILED",
+      "Supplier call was not started",
+    );
+
+    for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
+      try {
+        let task = await withTimeout(
+          this.supplierCalls.startSupplierCall(
+            { ...request, attemptNumber: attempt },
+            authorization,
+          ),
+          this.callPolicy.timeoutMs,
+        );
+
+        for (
+          let poll = 0;
+          ["planned", "queued", "in_progress"].includes(task.status) &&
+          poll < this.callPolicy.maximumPolls;
+          poll += 1
+        ) {
+          task = await withTimeout(
+            this.supplierCalls.getSupplierCall(task.callId),
+            this.callPolicy.timeoutMs,
+          );
+        }
+
+        if (["planned", "queued", "in_progress"].includes(task.status)) {
+          task = unresolvedTask(
+            task.callId,
+            "TIMEOUT",
+            "CALL-E result did not reach a terminal state within the polling limit",
+          );
+        }
+        lastTask = task;
+      } catch (error) {
+        const timedOut = error instanceof Error && error.message === "CALL_TIMEOUT";
+        lastTask = unresolvedTask(
+          `failed-${request.workflowId}-${request.supplierId}-${attempt}`,
+          timedOut ? "TIMEOUT" : "FAILED",
+          timedOut
+            ? "CALL-E operation exceeded the configured timeout"
+            : "CALL-E operation failed before a structured result was available",
+        );
+      }
+
+      const retryable = ["NO_ANSWER", "TIMEOUT", "FAILED"].includes(
+        lastTask.outcome,
+      );
+      if (!retryable || attempt === maximumAttempts) {
+        return { task: lastTask, attemptCount: attempt };
+      }
+      onRetry(attempt + 1, lastTask.outcome);
+    }
+
+    return { task: lastTask, attemptCount: maximumAttempts };
+  }
 
   async run(input: WorkflowInput): Promise<WorkflowResult> {
     const stateMachine = new ProcurementStateMachine(
@@ -97,11 +199,15 @@ export class ProcurementWorkflow {
     const auditTimeline: AuditEvent[] = [];
     const finish = (
       result: Omit<WorkflowResult, "workflowState" | "stateHistory">,
-    ): WorkflowResult => ({
-      ...result,
-      workflowState: stateMachine.current,
-      stateHistory: stateMachine.history,
-    });
+    ): WorkflowResult => {
+      const completed = {
+        ...result,
+        workflowState: stateMachine.current,
+        stateHistory: stateMachine.history,
+      };
+      this.runStore.complete(input.workflowId, completed);
+      return completed;
+    };
     const record = (
       type: AuditEvent["type"],
       summary: string,
@@ -115,6 +221,40 @@ export class ProcurementWorkflow {
         evidence,
       });
     };
+
+    if (this.runStore.begin(input.workflowId) === "DUPLICATE") {
+      const existing = this.runStore.getResult(input.workflowId);
+      if (existing) return existing;
+      stateMachine.transition("CANCELLED", "Duplicate run is already in progress");
+      record("DUPLICATE_RUN_BLOCKED", "Duplicate workflow execution blocked", {
+        workflowId: input.workflowId,
+      });
+      return {
+        workflowId: input.workflowId,
+        status: "EXECUTION_BLOCKED",
+        decision: null,
+        purchaseOrder: null,
+        proof: null,
+        auditTimeline,
+        workflowState: stateMachine.current,
+        stateHistory: stateMachine.history,
+      };
+    }
+
+    if (this.runStore.isCancelled(input.workflowId)) {
+      stateMachine.transition("CANCELLED", "Cancellation was requested before execution");
+      record("WORKFLOW_CANCELLED", "Workflow cancelled before supplier contact", {
+        workflowId: input.workflowId,
+      });
+      return finish({
+        workflowId: input.workflowId,
+        status: "EXECUTION_BLOCKED",
+        decision: null,
+        purchaseOrder: null,
+        proof: null,
+        auditTimeline,
+      });
+    }
 
     record("WORKFLOW_STARTED", "Autonomous procurement workflow started", {
       workflowId: input.workflowId,
@@ -186,10 +326,31 @@ export class ProcurementWorkflow {
     const offers: SupplierOffer[] = [];
 
     for (const supplier of input.suppliers) {
+      if (this.runStore.isCancelled(input.workflowId)) {
+        stateMachine.transition("CANCELLED", "Cancellation requested during supplier contact");
+        record("WORKFLOW_CANCELLED", "Workflow cancelled before the next supplier call", {
+          supplierId: supplier.supplierId,
+        });
+        return finish({
+          workflowId: input.workflowId,
+          status: "EXECUTION_BLOCKED",
+          decision: null,
+          purchaseOrder: null,
+          proof: null,
+          auditTimeline,
+        });
+      }
       stateMachine.transition("CALLING", `Contacting ${supplier.supplierName}`);
-      const task = await this.supplierCalls.startSupplierCall(
+      const { task, attemptCount } = await this.executeSupplierCall(
         toSupplierCallRequest(input, supplier, forecast.requiredQuantity),
         input.callAuthorization,
+        (nextAttempt, outcome) => {
+          record(
+            "CALL_RETRY_SCHEDULED",
+            `Bounded retry scheduled for ${supplier.supplierName}`,
+            { supplierId: supplier.supplierId, nextAttempt, previousOutcome: outcome },
+          );
+        },
       );
 
       offers.push(
@@ -198,6 +359,7 @@ export class ProcurementWorkflow {
           task,
           input.workflowId,
           input.inventory.sku,
+          attemptCount,
         ),
       );
       stateMachine.transition(
@@ -214,8 +376,17 @@ export class ProcurementWorkflow {
           taskCompleted: task.taskCompleted,
           confidence: task.completionConfidence,
           evidenceItems: task.evidence.length,
+          outcome: task.outcome,
+          attemptCount,
         },
       );
+      if (task.outcome === "TIMEOUT") {
+        record("CALL_TIMEOUT", `Supplier call timed out for ${supplier.supplierName}`, {
+          supplierId: supplier.supplierId,
+          callId: task.callId,
+          attemptCount,
+        });
+      }
     }
 
     stateMachine.transition("VALIDATING", "Structured supplier results ready for validation");
@@ -281,18 +452,50 @@ export class ProcurementWorkflow {
       },
     );
 
-    const purchaseOrder = await this.purchaseOrders.createPurchaseOrder({
-      workflowId: input.workflowId,
-      supplierId: decision.selectedOffer.supplierId,
-      supplierName: decision.selectedOffer.supplierName,
-      sku: decision.selectedOffer.sku,
-      quantity: forecast.requiredQuantity,
-      unitPriceEur: decision.selectedOffer.unitPriceEur,
-      totalPriceEur:
-        decision.selectedOffer.unitPriceEur * forecast.requiredQuantity,
-      deliveryAt: decision.selectedOffer.deliveryAt,
-      policyVersion: decision.validation.policyVersion,
-    });
+    if (this.runStore.isCancelled(input.workflowId)) {
+      stateMachine.transition("CANCELLED", "Cancellation requested before order preparation");
+      record("WORKFLOW_CANCELLED", "Workflow cancelled before purchase-order creation", {
+        supplierId: decision.selectedOffer.supplierId,
+      });
+      return finish({
+        workflowId: input.workflowId,
+        status: "EXECUTION_BLOCKED",
+        decision,
+        purchaseOrder: null,
+        proof: null,
+        auditTimeline,
+      });
+    }
+
+    let purchaseOrder: PurchaseOrder;
+    try {
+      purchaseOrder = await this.purchaseOrders.createPurchaseOrder({
+        idempotencyKey: `${input.workflowId}:purchase-order`,
+        workflowId: input.workflowId,
+        supplierId: decision.selectedOffer.supplierId,
+        supplierName: decision.selectedOffer.supplierName,
+        sku: decision.selectedOffer.sku,
+        quantity: forecast.requiredQuantity,
+        unitPriceEur: decision.selectedOffer.unitPriceEur,
+        totalPriceEur:
+          decision.selectedOffer.unitPriceEur * forecast.requiredQuantity,
+        deliveryAt: decision.selectedOffer.deliveryAt,
+        policyVersion: decision.validation.policyVersion,
+      });
+    } catch {
+      stateMachine.transition("FAILED", "Purchase-order adapter failed closed");
+      record("WORKFLOW_FAILED", "Synthetic purchase-order creation failed", {
+        idempotencyKey: `${input.workflowId}:purchase-order`,
+      });
+      return finish({
+        workflowId: input.workflowId,
+        status: "FAILED",
+        decision,
+        purchaseOrder: null,
+        proof: null,
+        auditTimeline,
+      });
+    }
     stateMachine.transition("ORDER_PREPARED", "Synthetic purchase order prepared within policy");
 
     record(

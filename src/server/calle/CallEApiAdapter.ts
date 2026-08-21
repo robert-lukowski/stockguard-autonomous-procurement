@@ -27,6 +27,7 @@ type CallEApiResponse = {
   structured_result?: SupplierCallStructuredResult | null;
   evidence?: string[];
   field_evidence?: SupplierCallTask["fieldEvidence"];
+  outcome?: SupplierCallTask["outcome"];
 };
 
 function mapTask(response: CallEApiResponse): SupplierCallTask {
@@ -52,6 +53,13 @@ function mapTask(response: CallEApiResponse): SupplierCallTask {
       valid: validation.valid,
       issues: validation.issues,
     },
+    outcome:
+      response.outcome ??
+      (response.task_completed
+        ? "ANSWERED"
+        : response.status === "failed"
+          ? "FAILED"
+          : "INCOMPLETE"),
   };
 }
 
@@ -104,7 +112,7 @@ export class CallEApiAdapter implements SupplierCallingPort {
       headers: {
         Authorization: `Bearer ${this.config.apiKey}`,
         "Content-Type": "application/json",
-        "Idempotency-Key": `${request.workflowId}:${request.supplierId}`,
+        "Idempotency-Key": `${request.workflowId}:${request.supplierId}:attempt:${request.attemptNumber}`,
       },
       body: JSON.stringify({
         task,
