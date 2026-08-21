@@ -1,0 +1,59 @@
+import type { Currency } from "../../domain";
+
+export type SupportedCallRegion = "DE" | "FR" | "PL" | "GB" | "US";
+export type SupportedCallLocale = "de-DE" | "fr-FR" | "pl-PL" | "en-GB" | "en-US";
+
+export type SupplierCallRequest = {
+  workflowId: string;
+  supplierId: string;
+  supplierName: string;
+  phoneE164: string;
+  region: SupportedCallRegion;
+  locale: SupportedCallLocale;
+  sku: string;
+  requestedQuantity: number;
+  requiredBy: string;
+  consentVerified: boolean;
+};
+
+export type CallAuthorization = {
+  workflowId: string;
+  approvedBy: string;
+  approvedAt: string;
+  expiresAt: string;
+  maximumCalls: number;
+  allowedSupplierIds: string[];
+  allowedPhoneNumbers: string[];
+};
+
+export type SupplierCallStructuredResult = {
+  supplierId: string;
+  language: string;
+  skuConfirmed: boolean;
+  availableQuantity: number | null;
+  unitPrice: number | null;
+  currency: Currency | null;
+  deliveryAt: string | null;
+  offerValidUntil: string | null;
+  commercialTermsChanged: boolean;
+  optOutRequested: boolean;
+  notes: string | null;
+};
+
+export type SupplierCallTask = {
+  callId: string;
+  status: "planned" | "queued" | "in_progress" | "completed" | "failed";
+  taskCompleted: boolean;
+  completionConfidence: number | null;
+  structuredResult: SupplierCallStructuredResult | null;
+  evidence: string[];
+};
+
+export interface SupplierCallingPort {
+  startSupplierCall(
+    request: SupplierCallRequest,
+    authorization: CallAuthorization,
+  ): Promise<SupplierCallTask>;
+
+  getSupplierCall(callId: string): Promise<SupplierCallTask>;
+}
