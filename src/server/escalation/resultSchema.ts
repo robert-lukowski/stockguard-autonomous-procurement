@@ -3,10 +3,10 @@ export const managerEscalationResultSchema = {
   additionalProperties: false,
   required: [
     "decision",
-    "preferredContactAt",
     "restrictedActionsRequested",
     "optOutRequested",
-    "summary",
+    "managerSummary",
+    "decisionEvidence",
   ],
   properties: {
     decision: {
@@ -20,11 +20,11 @@ export const managerEscalationResultSchema = {
       ],
     },
     preferredContactAt: {
-      anyOf: [{ type: "string", format: "date-time" }, { type: "null" }],
+      type: "string",
+      description: "Optional ISO 8601 callback time explicitly requested by the manager.",
     },
     restrictedActionsRequested: {
       type: "array",
-      uniqueItems: true,
       items: {
         type: "string",
         enum: [
@@ -37,6 +37,17 @@ export const managerEscalationResultSchema = {
       },
     },
     optOutRequested: { type: "boolean" },
-    summary: { type: ["string", "null"] },
+    managerSummary: {
+      type: "string",
+      description: "Concise summary of the bounded operational response.",
+    },
+    decisionEvidence: {
+      type: "string",
+      description: "Exact words spoken by the manager that support the decision enum.",
+    },
+    preferredContactEvidence: {
+      type: "string",
+      description: "Exact words supporting preferredContactAt when a callback time was provided.",
+    },
   },
 } as const;
