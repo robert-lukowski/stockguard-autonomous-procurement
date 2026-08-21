@@ -10,3 +10,4 @@ export type {
   StartManagerCallResponse,
 } from "./types";
 export * from "./backend";
+export * from "./aws";
