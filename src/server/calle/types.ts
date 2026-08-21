@@ -5,6 +5,7 @@ export type SupportedCallLocale = "de-DE" | "fr-FR" | "pl-PL" | "en-GB" | "en-US
 
 export type SupplierCallRequest = {
   workflowId: string;
+  attemptNumber: number;
   supplierId: string;
   supplierName: string;
   phoneE164: string;
@@ -70,6 +71,13 @@ export type SupplierCallTask = {
   evidence: string[];
   fieldEvidence: Partial<Record<EvidenceField, FieldEvidence>>;
   schemaValidation: StructuredResultValidation;
+  outcome:
+    | "ANSWERED"
+    | "NO_ANSWER"
+    | "VOICEMAIL"
+    | "TIMEOUT"
+    | "FAILED"
+    | "INCOMPLETE";
 };
 
 export interface SupplierCallingPort {
