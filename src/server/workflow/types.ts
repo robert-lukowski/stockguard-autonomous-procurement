@@ -10,6 +10,7 @@ import type {
   SupportedCallLocale,
   SupportedCallRegion,
 } from "../calle";
+import type { SignedDecisionProof } from "../../security";
 
 export type SupplierContact = {
   supplierId: string;
@@ -93,6 +94,7 @@ export type WorkflowResult = {
   purchaseOrder: PurchaseOrder | null;
   proof: DecisionProof | null;
   auditTimeline: AuditEvent[];
+  signedProof?: SignedDecisionProof;
 };
 
 export function toSupplierCallRequest(
