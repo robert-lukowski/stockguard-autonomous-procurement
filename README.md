@@ -21,6 +21,7 @@ The React 19 product dashboard currently provides:
 - evidence-aware structured result validation;
 - idempotent workflow and synthetic-order controls;
 - SHA-256 audit chaining and an ECDSA-signed Decision Proof v2.
+- a framework-neutral, locally tested Judge Mode backend core.
 
 The manager escalation preview demonstrates:
 
@@ -50,6 +51,8 @@ npm run build
 The public app uses mock CALL-E results and synthetic data. The live CALL-E adapters remain fail-closed. The frontend-to-backend Judge Mode contract contains no valid access code or credential and refuses to transmit data when no backend URL is configured.
 
 The intended live flow uses a backend-verified Devpost code, a short-lived one-call session, explicit consent, idempotency, rate limiting, country/number controls, a global kill switch and minimal retention. Real telephone calls and paid AWS infrastructure remain disabled until explicitly authorized.
+
+The local backend core implements these semantics through mockable ports and in-memory stores. It uses PBKDF2-SHA256 for the access-code verifier, stores only opaque-token and phone hashes, atomically consumes one call per session, deduplicates webhook IDs and rejects every webhook while provider authenticity verification is unconfigured. Distributed DynamoDB, Secrets Manager and KMS adapters are planned but not deployed.
 
 See [Judge Mode — Manager Escalation](docs/judge-mode-manager-escalation.md) for the state model, API contract, proposed AWS deployment, guardrails, failure behavior and implementation roadmap.
 
