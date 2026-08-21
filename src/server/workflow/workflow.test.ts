@@ -3,12 +3,17 @@ import type {
   ExchangeRatesToEur,
   ProcurementPolicy,
 } from "../../domain";
-import { MockCallEAdapter, type CallAuthorization } from "../calle";
+import {
+  MockCallEAdapter,
+  type CallAuthorization,
+  type SupplierCallingPort,
+} from "../calle";
 import {
   MockPurchaseOrderAdapter,
   ProcurementWorkflow,
   type SupplierContact,
   type WorkflowInput,
+  InMemoryWorkflowRunStore,
 } from ".";
 
 const suppliers: SupplierContact[] = [
@@ -184,5 +189,179 @@ describe("ProcurementWorkflow", () => {
 
     expect(result.status).toBe("EXECUTION_BLOCKED");
     expect(result.auditTimeline.at(-1)?.type).toBe("WORKFLOW_BLOCKED");
+  });
+
+  it("returns the completed result for a duplicate run without creating a second order", async () => {
+    const purchaseOrders = new MockPurchaseOrderAdapter();
+    const workflow = new ProcurementWorkflow(
+      new MockCallEAdapter(),
+      purchaseOrders,
+      () => new Date("2026-08-21T09:42:00Z"),
+    );
+    const input = workflowInput();
+
+    const first = await workflow.run(input);
+    const duplicate = await workflow.run(input);
+
+    expect(duplicate.purchaseOrder?.purchaseOrderId).toBe(
+      first.purchaseOrder?.purchaseOrderId,
+    );
+    expect(purchaseOrders.createdOrders).toHaveLength(1);
+  });
+
+  it("creates exactly one purchase order for a repeated idempotency key", async () => {
+    const purchaseOrders = new MockPurchaseOrderAdapter();
+    const request = {
+      idempotencyKey: "wf-1:purchase-order",
+      workflowId: "wf-1",
+      supplierId: "supplier-de-01",
+      supplierName: "NordWerk Supply",
+      sku: "CF-220",
+      quantity: 8,
+      unitPriceEur: 42,
+      totalPriceEur: 336,
+      deliveryAt: "2026-08-27T10:00:00+02:00",
+      policyVersion: policy.version,
+    };
+
+    const first = await purchaseOrders.createPurchaseOrder(request);
+    const duplicate = await purchaseOrders.createPurchaseOrder(request);
+
+    expect(duplicate.purchaseOrderId).toBe(first.purchaseOrderId);
+    expect(purchaseOrders.createdOrders).toHaveLength(1);
+  });
+
+  it("fails closed when synthetic purchase-order creation fails", async () => {
+    const workflow = new ProcurementWorkflow(
+      new MockCallEAdapter(),
+      {
+        async createPurchaseOrder() {
+          throw new Error("Synthetic PO adapter unavailable");
+        },
+      },
+      () => new Date("2026-08-21T09:42:00Z"),
+    );
+
+    const result = await workflow.run(workflowInput());
+
+    expect(result.status).toBe("FAILED");
+    expect(result.workflowState).toBe("FAILED");
+    expect(result.purchaseOrder).toBeNull();
+    expect(result.proof).toBeNull();
+    expect(result.auditTimeline.at(-1)?.type).toBe("WORKFLOW_FAILED");
+  });
+
+  it("honours cancellation before any supplier call or order", async () => {
+    const store = new InMemoryWorkflowRunStore();
+    store.cancel("wf-2026-081");
+    const purchaseOrders = new MockPurchaseOrderAdapter();
+    const workflow = new ProcurementWorkflow(
+      new MockCallEAdapter(),
+      purchaseOrders,
+      () => new Date("2026-08-21T09:42:00Z"),
+      undefined,
+      store,
+    );
+
+    const result = await workflow.run(workflowInput());
+
+    expect(result.workflowState).toBe("CANCELLED");
+    expect(result.auditTimeline.at(-1)?.type).toBe("WORKFLOW_CANCELLED");
+    expect(purchaseOrders.createdOrders).toHaveLength(0);
+  });
+
+  it("turns a missing terminal webhook into a controlled timeout and human review", async () => {
+    const pendingTask = {
+      callId: "call-pending",
+      status: "queued" as const,
+      taskCompleted: false,
+      completionConfidence: null,
+      structuredResult: null,
+      evidence: [],
+      fieldEvidence: {},
+      schemaValidation: { valid: false, issues: [] },
+      outcome: "INCOMPLETE" as const,
+    };
+    const supplier = suppliers[0];
+    const workflow = new ProcurementWorkflow(
+      new MockCallEAdapter({ [supplier.supplierId]: pendingTask }),
+      new MockPurchaseOrderAdapter(),
+      () => new Date("2026-08-21T09:42:00Z"),
+      undefined,
+      new InMemoryWorkflowRunStore(),
+      { maximumAttempts: 1, maximumPolls: 2, timeoutMs: 50 },
+    );
+
+    const result = await workflow.run(
+      workflowInput({
+        suppliers: [supplier],
+        callAuthorization: {
+          ...authorization,
+          maximumCalls: 1,
+          allowedSupplierIds: [supplier.supplierId],
+          allowedPhoneNumbers: [supplier.phoneE164],
+        },
+      }),
+    );
+
+    expect(result.status).toBe("HUMAN_EXCEPTION_REQUIRED");
+    expect(result.auditTimeline.some(({ type }) => type === "CALL_TIMEOUT")).toBe(true);
+    expect(result.decision?.rejectedOffers[0].offer.attemptCount).toBe(1);
+  });
+
+  it("retries a no-answer outcome once and then uses the completed quote", async () => {
+    const baseAdapter = new MockCallEAdapter();
+    let starts = 0;
+    const flakyAdapter: SupplierCallingPort = {
+      async startSupplierCall(request, callAuthorization) {
+        starts += 1;
+        const completed = await baseAdapter.startSupplierCall(
+          request,
+          callAuthorization,
+        );
+        return starts === 1
+          ? {
+              ...completed,
+              status: "failed" as const,
+              taskCompleted: false,
+              structuredResult: null,
+              fieldEvidence: {},
+              schemaValidation: { valid: false, issues: [] },
+              outcome: "NO_ANSWER" as const,
+            }
+          : completed;
+      },
+      getSupplierCall(callId) {
+        return baseAdapter.getSupplierCall(callId);
+      },
+    };
+    const supplier = suppliers[0];
+    const workflow = new ProcurementWorkflow(
+      flakyAdapter,
+      new MockPurchaseOrderAdapter(),
+      () => new Date("2026-08-21T09:42:00Z"),
+      undefined,
+      new InMemoryWorkflowRunStore(),
+      { maximumAttempts: 2, maximumPolls: 1, timeoutMs: 50 },
+    );
+
+    const result = await workflow.run(
+      workflowInput({
+        suppliers: [supplier],
+        callAuthorization: {
+          ...authorization,
+          maximumCalls: 2,
+          allowedSupplierIds: [supplier.supplierId],
+          allowedPhoneNumbers: [supplier.phoneE164],
+        },
+      }),
+    );
+
+    expect(starts).toBe(2);
+    expect(result.status).toBe("ORDER_CREATED");
+    expect(result.decision?.selectedOffer?.attemptCount).toBe(2);
+    expect(
+      result.auditTimeline.some(({ type }) => type === "CALL_RETRY_SCHEDULED"),
+    ).toBe(true);
   });
 });
