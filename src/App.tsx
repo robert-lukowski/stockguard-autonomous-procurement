@@ -15,6 +15,8 @@ import {
   Truck,
 } from "lucide-react";
 import { useState } from "react";
+import { runDemoWorkflow } from "./demo/runDemoWorkflow";
+import type { WorkflowResult } from "./server/workflow";
 
 type WorkflowStep = {
   label: string;
@@ -118,6 +120,37 @@ function StatusPill({ value }: { value: SupplierOffer["outcome"] }) {
 
 function App() {
   const [autonomyEnabled, setAutonomyEnabled] = useState(true);
+  const [demoStatus, setDemoStatus] = useState<
+    "idle" | "running" | "complete" | "blocked" | "error"
+  >("idle");
+  const [demoResult, setDemoResult] = useState<WorkflowResult | null>(null);
+
+  const runDemo = async () => {
+    setDemoStatus("running");
+    setDemoResult(null);
+
+    try {
+      await new Promise((resolve) => window.setTimeout(resolve, 650));
+      const result = await runDemoWorkflow(autonomyEnabled);
+      setDemoResult(result);
+      setDemoStatus(
+        result.status === "ORDER_CREATED" ? "complete" : "blocked",
+      );
+    } catch {
+      setDemoStatus("error");
+    }
+  };
+
+  const displayedSteps: WorkflowStep[] =
+    demoStatus === "complete"
+      ? steps
+      : steps.map((step, index) => ({
+          ...step,
+          status:
+            demoStatus === "running" && index === 0
+              ? "active"
+              : "pending",
+        }));
 
   return (
     <div className="app-shell">
@@ -153,6 +186,14 @@ function App() {
             <p>Predict shortages, call suppliers, validate evidence and execute within policy.</p>
           </div>
           <div className="topbar-actions">
+            <button
+              className="demo-run-button"
+              disabled={demoStatus === "running"}
+              onClick={runDemo}
+            >
+              <Sparkles size={16} />
+              {demoStatus === "running" ? "Running workflow…" : "Run autonomous demo"}
+            </button>
             <div className="kill-switch">
               <div>
                 <span>Autonomous execution</span>
@@ -186,7 +227,7 @@ function App() {
           </article>
           <article>
             <div className="metric-icon success"><CircleDollarSign size={19} /></div>
-            <div><span>Selected order</span><strong>€336.00</strong><small>Within €500 autonomy limit</small></div>
+            <div><span>Selected order</span><strong>{demoResult?.purchaseOrder ? `€${demoResult.purchaseOrder.totalPriceEur.toFixed(2)}` : "—"}</strong><small>{demoStatus === "complete" ? "Within €500 autonomy limit" : "Run demo to execute"}</small></div>
           </article>
         </section>
 
@@ -235,11 +276,11 @@ function App() {
                 <span className="section-kicker">Live orchestration</span>
                 <h2>Autonomous workflow</h2>
               </div>
-              <span className="live-indicator"><i /> Live</span>
+              <span className="live-indicator"><i /> {demoStatus === "running" ? "Running" : demoStatus === "complete" ? "Complete" : demoStatus === "blocked" ? "Blocked" : "Ready"}</span>
             </div>
 
             <div className="timeline">
-              {steps.map((step, index) => (
+              {displayedSteps.map((step, index) => (
                 <div className={`timeline-step ${step.status}`} key={step.label}>
                   <div className="timeline-marker">
                     {step.status === "complete" ? <BadgeCheck size={18} /> : <PackageCheck size={18} />}
@@ -252,7 +293,7 @@ function App() {
 
             <div className="proof-link">
               <FileCheck2 size={18} />
-              <div><strong>Compliance proof generated</strong><span>Policy PROCUREMENT-2026-08-v3</span></div>
+              <div><strong>{demoResult?.proof ? "Compliance proof generated" : "Compliance proof pending"}</strong><span>Policy PROCUREMENT-2026-08-v3</span></div>
               <ChevronRight size={18} />
             </div>
           </article>
@@ -304,9 +345,9 @@ function App() {
             <div className="panel-heading">
               <div>
                 <span className="section-kicker">Independent validation agent</span>
-                <h2>12 / 12 policy checks passed</h2>
+                <h2>{demoResult?.proof ? `${demoResult.proof.passedChecks.length} / 12 policy checks passed` : "Validation awaiting workflow"}</h2>
               </div>
-              <div className="validation-score"><ShieldCheck size={20} /> PASS</div>
+              <div className="validation-score"><ShieldCheck size={20} /> {demoResult?.proof ? "PASS" : "READY"}</div>
             </div>
             <div className="checks-grid">
               {checks.map((check) => <div key={check}><BadgeCheck size={16} /> {check}</div>)}
@@ -315,15 +356,15 @@ function App() {
 
           <article className="panel order-panel">
             <div className="panel-heading">
-              <div><span className="section-kicker">Execution result</span><h2>Purchase order PO-1042</h2></div>
+              <div><span className="section-kicker">Execution result</span><h2>{demoResult?.purchaseOrder ? `Purchase order ${demoResult.purchaseOrder.purchaseOrderId}` : "No order created yet"}</h2></div>
               <PackageCheck className="order-check" size={30} />
             </div>
             <dl>
-              <div><dt>Supplier</dt><dd>NordWerk Supply</dd></div>
-              <div><dt>Quantity</dt><dd>8 × CF-220</dd></div>
-              <div><dt>Total value</dt><dd>€336.00</dd></div>
-              <div><dt>Delivery</dt><dd>27 Aug, before stockout</dd></div>
-              <div><dt>Execution mode</dt><dd>Autonomous green zone</dd></div>
+              <div><dt>Supplier</dt><dd>{demoResult?.purchaseOrder?.supplierName ?? "Awaiting workflow"}</dd></div>
+              <div><dt>Quantity</dt><dd>{demoResult?.purchaseOrder ? `${demoResult.purchaseOrder.quantity} × ${demoResult.purchaseOrder.sku}` : "—"}</dd></div>
+              <div><dt>Total value</dt><dd>{demoResult?.purchaseOrder ? `€${demoResult.purchaseOrder.totalPriceEur.toFixed(2)}` : "—"}</dd></div>
+              <div><dt>Delivery</dt><dd>{demoResult?.purchaseOrder ? "27 Aug, before stockout" : "—"}</dd></div>
+              <div><dt>Execution mode</dt><dd>{demoResult?.status === "ORDER_CREATED" ? "Autonomous green zone" : demoStatus === "blocked" ? "Execution blocked" : "Ready"}</dd></div>
             </dl>
             <button className="primary-button"><FileCheck2 size={17} /> Open decision proof</button>
           </article>
