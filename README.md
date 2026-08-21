@@ -20,8 +20,10 @@ The React 19 product dashboard currently provides:
 - explicit workflow states, bounded retries, timeout and cancellation behavior;
 - evidence-aware structured result validation;
 - idempotent workflow and synthetic-order controls;
-- SHA-256 audit chaining and an ECDSA-signed Decision Proof v2.
-- a framework-neutral, locally tested Judge Mode backend core.
+- SHA-256 audit chaining and an ECDSA-signed Decision Proof v2;
+- a framework-neutral, locally tested Judge Mode backend core;
+- API Gateway/Lambda handler contracts plus DynamoDB conditional-write and
+  Secrets Manager adapters, all still undeployed.
 
 The manager escalation preview demonstrates:
 
@@ -52,7 +54,9 @@ The public app uses mock CALL-E results and synthetic data. The live CALL-E adap
 
 The intended live flow uses a backend-verified Devpost code, a short-lived one-call session, explicit consent, idempotency, rate limiting, country/number controls, a global kill switch and minimal retention. Real telephone calls and paid AWS infrastructure remain disabled until explicitly authorized.
 
-The local backend core implements these semantics through mockable ports and in-memory stores. It uses PBKDF2-SHA256 for the access-code verifier, stores only opaque-token and phone hashes, atomically consumes one call per session, deduplicates webhook IDs and rejects every webhook while provider authenticity verification is unconfigured. Distributed DynamoDB, Secrets Manager and KMS adapters are planned but not deployed.
+The local backend core implements these semantics through mockable ports. It uses PBKDF2-SHA256 for the access-code verifier, stores only opaque-token and phone hashes, atomically consumes one call per session, deduplicates webhook IDs and rejects every webhook while provider authenticity verification is unconfigured.
+
+The repository now also contains framework-neutral API Gateway/Lambda handler contracts, DynamoDB command adapters for conditional session claims, rate limits, the global call budget and webhook deduplication, plus a Secrets Manager access-code adapter. They are tested as code only: no AWS SDK composition root, stack or resource has been deployed, and the live CALL-E path remains disabled. KMS signing still requires a live backend adapter.
 
 See [Judge Mode — Manager Escalation](docs/judge-mode-manager-escalation.md) for the state model, API contract, proposed AWS deployment, guardrails, failure behavior and implementation roadmap.
 
