@@ -147,11 +147,18 @@ p { color: var(--muted); margin: 5px 0 0; font-size: 13px; }
 .proof-link span { color: var(--muted); margin-top: 2px; }
 
 .offers-panel { margin-bottom: 14px; padding-bottom: 8px; }
-.secondary-button, .primary-button {
+.secondary-button, .primary-button, .demo-run-button {
   display: flex; align-items: center; justify-content: center; gap: 7px;
   border-radius: 9px; padding: 9px 12px; font-size: 11px; font-weight: 700; cursor: pointer;
 }
 .secondary-button { background: white; color: var(--ink); border: 1px solid var(--line); }
+.demo-run-button {
+  color: white;
+  background: linear-gradient(135deg, #0c7c59, #075c43);
+  border: 0;
+  box-shadow: 0 5px 14px rgba(12, 124, 89, .18);
+}
+.demo-run-button:disabled { cursor: wait; opacity: .65; }
 .primary-button { width: 100%; color: white; background: var(--green); border: 0; margin-top: 16px; }
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 11px; }
