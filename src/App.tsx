@@ -17,6 +17,7 @@ import {
 import { useState } from "react";
 import { runDemoWorkflow } from "./demo/runDemoWorkflow";
 import type { WorkflowResult } from "./server/workflow";
+import { verifyDecisionProof, type ProofVerification } from "./security";
 
 type WorkflowStep = {
   label: string;
@@ -124,21 +125,39 @@ function App() {
     "idle" | "running" | "complete" | "blocked" | "error"
   >("idle");
   const [demoResult, setDemoResult] = useState<WorkflowResult | null>(null);
+  const [proofVerification, setProofVerification] = useState<ProofVerification | null>(null);
 
   const runDemo = async () => {
     setDemoStatus("running");
     setDemoResult(null);
+    setProofVerification(null);
 
     try {
       await new Promise((resolve) => window.setTimeout(resolve, 650));
       const result = await runDemoWorkflow(autonomyEnabled);
       setDemoResult(result);
+      if (result.signedProof) {
+        setProofVerification(await verifyDecisionProof(result.signedProof));
+      }
       setDemoStatus(
         result.status === "ORDER_CREATED" ? "complete" : "blocked",
       );
     } catch {
       setDemoStatus("error");
     }
+  };
+
+  const verifyOriginalProof = async () => {
+    if (demoResult?.signedProof) {
+      setProofVerification(await verifyDecisionProof(demoResult.signedProof));
+    }
+  };
+
+  const verifyTamperedCopy = async () => {
+    if (!demoResult?.signedProof) return;
+    const tampered = structuredClone(demoResult.signedProof);
+    tampered.payload.orderValueEur = 1;
+    setProofVerification(await verifyDecisionProof(tampered));
   };
 
   const displayedSteps: WorkflowStep[] =
@@ -368,6 +387,46 @@ function App() {
             </dl>
             <button className="primary-button"><FileCheck2 size={17} /> Open decision proof</button>
           </article>
+        </section>
+
+        <section className="panel crypto-proof-panel" id="evidence">
+          <div className="panel-heading">
+            <div>
+              <span className="section-kicker">Cryptographic decision evidence</span>
+              <h2>Machine-verifiable decision proof</h2>
+              <p>SHA-256 offer hashes · tamper-evident audit chain · ECDSA P-256 signature</p>
+            </div>
+            <div className={`proof-verdict ${proofVerification?.valid ? "valid" : proofVerification ? "invalid" : "pending"}`}>
+              {proofVerification?.valid ? <BadgeCheck size={20} /> : <ShieldCheck size={20} />}
+              <div>
+                <strong>{proofVerification?.reason ?? "Run workflow to generate proof"}</strong>
+                <span>{demoResult?.signedProof?.signer.mode === "ephemeral-browser-demo" ? "Ephemeral demo key · KMS-ready signer interface" : "No signature available"}</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="proof-details">
+            <div><span>Payload hash</span><code>{demoResult?.signedProof?.payloadHash ?? "—"}</code></div>
+            <div><span>Audit root</span><code>{demoResult?.signedProof?.payload.auditRootHash ?? "—"}</code></div>
+            <div><span>Signer key</span><code>{demoResult?.signedProof?.signer.keyId ?? "—"}</code></div>
+            <div><span>Chain events</span><strong>{demoResult?.signedProof?.payload.auditChain.length ?? 0}</strong></div>
+          </div>
+
+          <div className="verification-checks">
+            <span className={proofVerification?.payloadHashValid ? "pass" : ""}>Payload hash</span>
+            <span className={proofVerification?.auditChainValid ? "pass" : ""}>Audit chain</span>
+            <span className={proofVerification?.signatureValid ? "pass" : ""}>Digital signature</span>
+          </div>
+
+          <div className="proof-actions">
+            <button className="primary-button compact" disabled={!demoResult?.signedProof} onClick={verifyOriginalProof}>
+              <ShieldCheck size={17} /> Verify original proof
+            </button>
+            <button className="secondary-button" disabled={!demoResult?.signedProof} onClick={verifyTamperedCopy}>
+              <TriangleAlert size={16} /> Tamper with price and verify
+            </button>
+          </div>
+          <small className="proof-disclaimer">The demo signature verifies integrity against the included session public key. Production will establish StockGuard origin through a trusted AWS KMS key. Neither mode proves that a supplier statement is true or that transcription is error-free.</small>
         </section>
 
         <footer>
