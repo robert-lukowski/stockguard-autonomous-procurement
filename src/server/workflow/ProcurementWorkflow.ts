@@ -16,6 +16,7 @@ import type {
   WorkflowResult,
 } from "./types";
 import { toSupplierCallRequest } from "./types";
+import { ProcurementStateMachine, type WorkflowStateEvent } from "./stateMachine";
 
 type Clock = () => Date;
 
@@ -60,10 +61,23 @@ export class ProcurementWorkflow {
     private readonly supplierCalls: SupplierCallingPort,
     private readonly purchaseOrders: PurchaseOrderPort,
     private readonly clock: Clock = () => new Date(),
+    private readonly stateObserver?: (event: WorkflowStateEvent) => void,
   ) {}
 
   async run(input: WorkflowInput): Promise<WorkflowResult> {
+    const stateMachine = new ProcurementStateMachine(
+      input.workflowId,
+      this.clock,
+      this.stateObserver,
+    );
     const auditTimeline: AuditEvent[] = [];
+    const finish = (
+      result: Omit<WorkflowResult, "workflowState" | "stateHistory">,
+    ): WorkflowResult => ({
+      ...result,
+      workflowState: stateMachine.current,
+      stateHistory: stateMachine.history,
+    });
     const record = (
       type: AuditEvent["type"],
       summary: string,
@@ -84,21 +98,23 @@ export class ProcurementWorkflow {
     });
 
     if (!input.autonomousExecutionEnabled) {
+      stateMachine.transition("CANCELLED", "Operator kill switch is active");
       record("WORKFLOW_BLOCKED", "Operator kill switch is active");
-      return {
+      return finish({
         workflowId: input.workflowId,
         status: "EXECUTION_BLOCKED",
         decision: null,
         purchaseOrder: null,
         proof: null,
         auditTimeline,
-      };
+      });
     }
 
     if (
       input.suppliers.length > input.callAuthorization.maximumCalls ||
       input.suppliers.length > 5
     ) {
+      stateMachine.transition("CANCELLED", "Authorized call limit exceeded");
       record(
         "WORKFLOW_BLOCKED",
         "Supplier count exceeds the authorized call limit",
@@ -107,17 +123,18 @@ export class ProcurementWorkflow {
           authorizedCalls: input.callAuthorization.maximumCalls,
         },
       );
-      return {
+      return finish({
         workflowId: input.workflowId,
         status: "EXECUTION_BLOCKED",
         decision: null,
         purchaseOrder: null,
         proof: null,
         auditTimeline,
-      };
+      });
     }
 
     const forecast = calculateShortage(input.inventory);
+    stateMachine.transition("DEMAND_DETECTED", "Demand and inventory evaluated");
     record("SHORTAGE_CALCULATED", "Inventory shortage calculation completed", {
       sku: forecast.sku,
       requiredQuantity: forecast.requiredQuantity,
@@ -126,20 +143,26 @@ export class ProcurementWorkflow {
     });
 
     if (!forecast.shortageDetected) {
+      stateMachine.transition("CANCELLED", "No inventory shortage detected");
       record("NO_ACTION_REQUIRED", "No replenishment is required");
-      return {
+      return finish({
         workflowId: input.workflowId,
         status: "NO_ACTION_REQUIRED",
         decision: null,
         purchaseOrder: null,
         proof: null,
         auditTimeline,
-      };
+      });
     }
 
+    stateMachine.transition(
+      "CONTACTS_PLANNED",
+      `${input.suppliers.length} approved supplier contacts planned`,
+    );
     const offers: SupplierOffer[] = [];
 
     for (const supplier of input.suppliers) {
+      stateMachine.transition("CALLING", `Contacting ${supplier.supplierName}`);
       const task = await this.supplierCalls.startSupplierCall(
         toSupplierCallRequest(input, supplier, forecast.requiredQuantity),
         input.callAuthorization,
@@ -152,6 +175,10 @@ export class ProcurementWorkflow {
           input.workflowId,
           input.inventory.sku,
         ),
+      );
+      stateMachine.transition(
+        "OFFER_RECEIVED",
+        `Call outcome received from ${supplier.supplierName}: ${task.status}`,
       );
 
       record(
@@ -167,12 +194,14 @@ export class ProcurementWorkflow {
       );
     }
 
+    stateMachine.transition("VALIDATING", "Structured supplier results ready for validation");
     const decision = selectBestCompliantOffer(
       offers,
       forecast,
       input.procurementPolicy,
       input.exchangeRates,
     );
+    stateMachine.transition("POLICY_CHECK", "Deterministic procurement rules evaluated");
 
     for (const rejected of decision.rejectedOffers) {
       record(
@@ -190,21 +219,23 @@ export class ProcurementWorkflow {
       !decision.selectedOffer ||
       !decision.validation
     ) {
+      stateMachine.transition("HUMAN_REVIEW", "No offer qualified for autonomous execution");
       record(
         "HUMAN_EXCEPTION_REQUIRED",
         "No offer qualified for autonomous execution",
       );
 
-      return {
+      return finish({
         workflowId: input.workflowId,
         status: "HUMAN_EXCEPTION_REQUIRED",
         decision,
         purchaseOrder: null,
         proof: null,
         auditTimeline,
-      };
+      });
     }
 
+    stateMachine.transition("SELECTED", `${decision.selectedOffer.supplierName} selected`);
     record(
       "OFFER_SELECTED",
       `${decision.selectedOffer.supplierName} selected`,
@@ -236,6 +267,7 @@ export class ProcurementWorkflow {
       deliveryAt: decision.selectedOffer.deliveryAt,
       policyVersion: decision.validation.policyVersion,
     });
+    stateMachine.transition("ORDER_PREPARED", "Synthetic purchase order prepared within policy");
 
     record(
       "PURCHASE_ORDER_CREATED",
@@ -262,13 +294,13 @@ export class ProcurementWorkflow {
       explanation: decision.reason,
     };
 
-    return {
+    return finish({
       workflowId: input.workflowId,
       status: "ORDER_CREATED",
       decision,
       purchaseOrder,
       proof,
       auditTimeline,
-    };
+    });
   }
 }
