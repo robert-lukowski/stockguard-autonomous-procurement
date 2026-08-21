@@ -40,6 +40,27 @@ export type SupplierCallStructuredResult = {
   notes: string | null;
 };
 
+export type EvidenceField =
+  | "skuConfirmed"
+  | "availableQuantity"
+  | "unitPrice"
+  | "currency"
+  | "deliveryAt"
+  | "offerValidUntil"
+  | "commercialTermsChanged";
+
+export type FieldEvidence = {
+  field: EvidenceField;
+  source: "transcript" | "structured-result" | "operator";
+  excerpt: string;
+  verified: boolean;
+};
+
+export type StructuredResultValidation = {
+  valid: boolean;
+  issues: Array<{ field: string; message: string }>;
+};
+
 export type SupplierCallTask = {
   callId: string;
   status: "planned" | "queued" | "in_progress" | "completed" | "failed";
@@ -47,6 +68,8 @@ export type SupplierCallTask = {
   completionConfidence: number | null;
   structuredResult: SupplierCallStructuredResult | null;
   evidence: string[];
+  fieldEvidence: Partial<Record<EvidenceField, FieldEvidence>>;
+  schemaValidation: StructuredResultValidation;
 };
 
 export interface SupplierCallingPort {
