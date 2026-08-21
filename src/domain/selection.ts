@@ -13,6 +13,7 @@ export function selectBestCompliantOffer(
   forecast: ShortageForecast,
   policy: ProcurementPolicy,
   exchangeRates: ExchangeRatesToEur,
+  evaluatedAt?: string,
 ): ProcurementDecision {
   if (!forecast.shortageDetected) {
     return {
@@ -28,7 +29,7 @@ export function selectBestCompliantOffer(
     const normalized = normalizeOffer(offer, exchangeRates);
     return {
       offer: normalized,
-      validation: validateOffer(normalized, forecast, policy),
+      validation: validateOffer(normalized, forecast, policy, evaluatedAt),
     };
   });
 
@@ -52,7 +53,7 @@ export function selectBestCompliantOffer(
     });
 
   const rejectedOffers = evaluated.filter(
-    ({ validation }) => validation.decision === "BLOCK",
+    ({ validation }) => validation.decision !== "PASS",
   );
 
   if (compliant.length === 0) {
