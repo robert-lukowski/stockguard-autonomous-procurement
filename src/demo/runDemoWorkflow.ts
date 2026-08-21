@@ -16,6 +16,12 @@ import {
   type WorkflowResult,
 } from "../server/workflow";
 import {
+  ManagerEscalationWorkflow,
+  MockManagerEscalationAdapter,
+  type MockManagerResponse,
+} from "../server/escalation";
+import type { SupportedCallLocale } from "../server/calle";
+import {
   createAuditChain,
   createSignedDecisionProof,
   sha256,
@@ -75,7 +81,9 @@ export type DemoCallOutcome =
   | "late"
   | "expensive"
   | "missing-webhook"
-  | "connection-lost";
+  | "connection-lost"
+  | "insufficient"
+  | "terms-changed";
 
 export type DemoScenario = {
   requiredQuantity: number;
@@ -94,6 +102,19 @@ export const guidedScenario: DemoScenario = {
     "supplier-de-01": "quote",
     "supplier-fr-01": "quote",
     "supplier-pl-01": "late",
+  },
+  primaryOfferQuantity: 8,
+  primaryOfferUnitPriceEur: 42,
+};
+
+export const managerEscalationScenario: DemoScenario = {
+  requiredQuantity: 8,
+  budgetEur: 500,
+  stockoutAt: "2026-08-28T12:00:00+02:00",
+  supplierOutcomes: {
+    "supplier-de-01": "insufficient",
+    "supplier-fr-01": "late",
+    "supplier-pl-01": "terms-changed",
   },
   primaryOfferQuantity: 8,
   primaryOfferUnitPriceEur: 42,
@@ -188,8 +209,17 @@ function scenarioResults(scenario: DemoScenario): Record<string, MockSupplierRes
         result.unitPrice = scenario.primaryOfferUnitPriceEur;
       }
       if (outcome === "incomplete") result.unitPrice = null;
-      if (outcome === "late") result.deliveryAt = "2026-09-05T10:00:00+02:00";
-      if (outcome === "expensive") result.unitPrice = 60;
+      if (outcome === "insufficient") result.availableQuantity = Math.max(0, scenario.requiredQuantity - 2);
+      if (outcome === "late") {
+        result.availableQuantity = scenario.requiredQuantity;
+        result.deliveryAt = "2026-09-05T10:00:00+02:00";
+      }
+      if (outcome === "expensive") result.unitPrice = result.currency === "PLN" ? 250 : 60;
+      if (outcome === "terms-changed") {
+        result.availableQuantity = scenario.requiredQuantity;
+        result.deliveryAt = "2026-08-27T10:00:00+02:00";
+        result.commercialTermsChanged = true;
+      }
       return [supplierId, result];
     }),
   );
@@ -230,24 +260,13 @@ function createInput(
   };
 }
 
-export async function runDemoWorkflow(
-  autonomousExecutionEnabled: boolean,
-  scenario: DemoScenario = guidedScenario,
+async function signWorkflowResult(
+  result: WorkflowResult,
+  input: WorkflowInput,
 ): Promise<WorkflowResult> {
-  const workflow = new ProcurementWorkflow(
-    new MockCallEAdapter(scenarioResults(scenario)),
-    new MockPurchaseOrderAdapter(),
-  );
-
-  const input = createInput(autonomousExecutionEnabled, scenario);
-  const result = await workflow.run(input);
-
-  if (!result.proof || !result.decision?.selectedOffer || !result.decision.validation) {
-    return result;
-  }
-
+  if (!result.proof || !result.decision) return result;
   const allOffers = [
-    result.decision.selectedOffer,
+    ...(result.decision.selectedOffer ? [result.decision.selectedOffer] : []),
     ...result.decision.rejectedOffers.map(({ offer }) => offer),
   ];
   const offerHashes = Object.fromEntries(
@@ -279,6 +298,26 @@ export async function runDemoWorkflow(
     })),
     ruleTrace: result.proof.ruleTrace,
     orderValueEur: result.proof.orderValueEur,
+    managerEscalation: result.managerEscalation
+      ? {
+          callIdHash: await sha256(result.managerEscalation.callId),
+          responseHash: await sha256({
+            rawDecision: result.managerEscalation.rawDecision,
+            effectiveDecision: result.managerEscalation.effectiveDecision,
+            preferredContactAt: result.managerEscalation.preferredContactAt,
+            restrictedActionsRequested: result.managerEscalation.restrictedActionsRequested,
+            summary: result.managerEscalation.summary,
+          }),
+          evidenceHash: await sha256(result.managerEscalation.evidenceExcerpt),
+          rawDecision: result.managerEscalation.rawDecision,
+          effectiveDecision: result.managerEscalation.effectiveDecision,
+          preferredContactAt: result.managerEscalation.preferredContactAt,
+          restrictedActionsRequested: result.managerEscalation.restrictedActionsRequested,
+          outcome: result.managerEscalation.outcome,
+          policyChanged: false,
+          orderCreated: false,
+        }
+      : null,
     auditChain,
   });
   result.stateHistory = appendWorkflowState(
@@ -290,4 +329,66 @@ export async function runDemoWorkflow(
   result.workflowState = "PROOF_SIGNED";
 
   return result;
+}
+
+export async function runDemoWorkflow(
+  autonomousExecutionEnabled: boolean,
+  scenario: DemoScenario = guidedScenario,
+): Promise<WorkflowResult> {
+  const workflow = new ProcurementWorkflow(
+    new MockCallEAdapter(scenarioResults(scenario)),
+    new MockPurchaseOrderAdapter(),
+  );
+
+  const input = createInput(autonomousExecutionEnabled, scenario);
+  const result = await workflow.run(input);
+  return signWorkflowResult(result, input);
+}
+
+export async function runManagerEscalationDemo(
+  response: MockManagerResponse,
+  locale: SupportedCallLocale = "en-GB",
+): Promise<WorkflowResult> {
+  const input = createInput(true, managerEscalationScenario);
+  const procurement = new ProcurementWorkflow(
+    new MockCallEAdapter(scenarioResults(managerEscalationScenario)),
+    new MockPurchaseOrderAdapter(),
+  );
+  const baseResult = await procurement.run(input);
+  const sessionId = `mock-judge-${input.workflowId}`;
+  const phoneE164 = "+15550109999";
+  const request = {
+    runId: input.workflowId,
+    sessionId,
+    attemptNumber: 1 as const,
+    idempotencyKey: `${sessionId}:${input.workflowId}:manager-escalation:attempt:1`,
+    phoneE164,
+    locale,
+    consentConfirmed: true as const,
+    context: {
+      organizationName: "Northstar Manufacturing" as const,
+      sku: input.inventory.sku,
+      requiredQuantity: managerEscalationScenario.requiredQuantity,
+      stockoutAt: input.inventory.stockoutAt,
+      rejectedOffers: baseResult.decision?.rejectedOffers.map(({ offer, validation }) => ({
+        supplierName: offer.supplierName,
+        failedChecks: validation.failedCheckIds,
+        requiresHumanChecks: validation.humanReviewCheckIds,
+      })) ?? [],
+    },
+  };
+  const escalation = new ManagerEscalationWorkflow(
+    new MockManagerEscalationAdapter(response),
+  );
+  const result = await escalation.run(baseResult, request, {
+    sessionId,
+    accessCodeVerifiedServerSide: true,
+    issuedAt: "2026-08-21T10:00:00Z",
+    expiresAt: "2099-08-21T10:15:00Z",
+    allowedPhoneE164: phoneE164,
+    maximumCalls: 1,
+    consentRecordedAt: "2026-08-21T10:00:30Z",
+    killSwitchActive: false,
+  });
+  return signWorkflowResult(result, input);
 }

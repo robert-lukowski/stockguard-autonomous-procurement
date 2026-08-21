@@ -10,7 +10,7 @@ export type HashChainedEvent<T = unknown> = {
 };
 
 export type DecisionProofPayload = {
-  schemaVersion: "stockguard-decision-proof-v1";
+  schemaVersion: "stockguard-decision-proof-v2";
   canonicalization: typeof CANONICALIZATION_VERSION;
   workflowId: string;
   generatedAt: string;
@@ -18,8 +18,8 @@ export type DecisionProofPayload = {
   policyHash: string;
   offerHashes: Record<string, string>;
   evidenceHashes: Record<string, string>;
-  selectedSupplierId: string;
-  selectedOfferId: string;
+  selectedSupplierId: string | null;
+  selectedOfferId: string | null;
   passedChecks: string[];
   rejectedSuppliers: Array<{
     supplierId: string;
@@ -35,7 +35,19 @@ export type DecisionProofPayload = {
       inputs: Record<string, string | number | boolean | null>;
     }>;
   }>;
-  orderValueEur: number;
+  orderValueEur: number | null;
+  managerEscalation: {
+    callIdHash: string;
+    responseHash: string;
+    evidenceHash: string;
+    rawDecision: string;
+    effectiveDecision: string;
+    preferredContactAt: string | null;
+    restrictedActionsRequested: string[];
+    outcome: string;
+    policyChanged: false;
+    orderCreated: false;
+  } | null;
   auditChain: HashChainedEvent[];
   auditRootHash: string;
 };
@@ -107,7 +119,7 @@ export async function createSignedDecisionProof(
 ): Promise<SignedDecisionProof> {
   const completePayload: DecisionProofPayload = {
     ...payload,
-    schemaVersion: "stockguard-decision-proof-v1",
+    schemaVersion: "stockguard-decision-proof-v2",
     canonicalization: CANONICALIZATION_VERSION,
     auditRootHash: payload.auditChain.at(-1)?.hash ?? "GENESIS",
   };

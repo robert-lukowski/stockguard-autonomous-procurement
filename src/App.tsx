@@ -17,12 +17,15 @@ import {
 import { useState } from "react";
 import {
   guidedScenario,
+  runManagerEscalationDemo,
   runDemoWorkflow,
   type DemoCallOutcome,
   type DemoScenario,
 } from "./demo/runDemoWorkflow";
 import type { WorkflowResult } from "./server/workflow";
 import { verifyDecisionProof, type ProofVerification } from "./security";
+import type { MockManagerResponse } from "./server/escalation";
+import type { SupportedCallLocale } from "./server/calle";
 
 type WorkflowStep = {
   label: string;
@@ -39,7 +42,7 @@ type SupplierOffer = {
   unitPrice: string;
   normalizedTotal: string;
   delivery: string;
-  outcome: "Selected" | "Too late" | "Insufficient";
+  outcome: "Selected" | "Too late" | "Insufficient" | "Terms changed" | "Over budget" | "Rejected";
   confidence: number;
 };
 
@@ -125,6 +128,21 @@ function StatusPill({ value }: { value: SupplierOffer["outcome"] }) {
   return <span className={`status-pill ${value.toLowerCase().replace(" ", "-")}`}>{value}</span>;
 }
 
+const supplierPresentation: Record<string, Pick<SupplierOffer, "country" | "flag" | "language">> = {
+  "supplier-de-01": { country: "Germany", flag: "DE", language: "German" },
+  "supplier-fr-01": { country: "France", flag: "FR", language: "French" },
+  "supplier-pl-01": { country: "Poland", flag: "PL", language: "Polish" },
+};
+
+function outcomeForRejectedOffer(failedChecks: string[], humanChecks: string[]): SupplierOffer["outcome"] {
+  const checks = [...failedChecks, ...humanChecks].join(" ").toLowerCase();
+  if (checks.includes("quantity")) return "Insufficient";
+  if (checks.includes("delivery")) return "Too late";
+  if (checks.includes("commercial")) return "Terms changed";
+  if (checks.includes("budget") || checks.includes("price")) return "Over budget";
+  return "Rejected";
+}
+
 function App() {
   const [autonomyEnabled, setAutonomyEnabled] = useState(true);
   const [demoStatus, setDemoStatus] = useState<
@@ -132,8 +150,10 @@ function App() {
   >("idle");
   const [demoResult, setDemoResult] = useState<WorkflowResult | null>(null);
   const [proofVerification, setProofVerification] = useState<ProofVerification | null>(null);
-  const [labMode, setLabMode] = useState<"guided" | "custom">("guided");
+  const [labMode, setLabMode] = useState<"guided" | "custom" | "manager">("guided");
   const [scenario, setScenario] = useState<DemoScenario>(structuredClone(guidedScenario));
+  const [managerResponse, setManagerResponse] = useState<MockManagerResponse>("ACKNOWLEDGE_AND_START_HUMAN_SOURCING");
+  const [managerLocale, setManagerLocale] = useState<SupportedCallLocale>("en-GB");
 
   const runDemo = async () => {
     setDemoStatus("running");
@@ -141,14 +161,22 @@ function App() {
     setProofVerification(null);
 
     try {
-      const selectedScenario = labMode === "guided" ? guidedScenario : scenario;
-      const result = await runDemoWorkflow(autonomyEnabled, selectedScenario);
+      const result = labMode === "manager"
+        ? await runManagerEscalationDemo(managerResponse, managerLocale)
+        : await runDemoWorkflow(
+            autonomyEnabled,
+            labMode === "guided" ? guidedScenario : scenario,
+          );
       setDemoResult(result);
       if (result.signedProof) {
         setProofVerification(await verifyDecisionProof(result.signedProof));
       }
       setDemoStatus(
-        result.status === "ORDER_CREATED" ? "complete" : "blocked",
+        result.status === "ORDER_CREATED" ||
+          result.status === "ESCALATION_RECORDED" ||
+          result.status === "AUTHENTICATED_APPROVAL_REQUIRED"
+          ? "complete"
+          : "blocked",
       );
     } catch {
       setDemoStatus("error");
@@ -171,7 +199,11 @@ function App() {
   const verifyTamperedCopy = async () => {
     if (!demoResult?.signedProof) return;
     const tampered = structuredClone(demoResult.signedProof);
-    tampered.payload.orderValueEur = 1;
+    if (tampered.payload.managerEscalation) {
+      tampered.payload.managerEscalation.effectiveDecision = "DECLINE_ESCALATION";
+    } else {
+      tampered.payload.orderValueEur = 1;
+    }
     setProofVerification(await verifyDecisionProof(tampered));
   };
 
@@ -189,6 +221,43 @@ function App() {
     demoResult?.decision?.validation ??
     demoResult?.decision?.rejectedOffers[0]?.validation ??
     null;
+  const displayedOffers: SupplierOffer[] = demoResult?.decision
+    ? [
+        ...(demoResult.decision.selectedOffer && demoResult.decision.validation
+          ? [{
+              offer: demoResult.decision.selectedOffer,
+              outcome: "Selected" as const,
+              failedChecks: [] as string[],
+              humanChecks: [] as string[],
+            }]
+          : []),
+        ...demoResult.decision.rejectedOffers.map(({ offer, validation }) => ({
+          offer,
+          outcome: outcomeForRejectedOffer(
+            validation.failedCheckIds,
+            validation.humanReviewCheckIds,
+          ),
+          failedChecks: validation.failedCheckIds,
+          humanChecks: validation.humanReviewCheckIds,
+        })),
+      ].map(({ offer, outcome }) => ({
+        supplier: offer.supplierName,
+        ...(supplierPresentation[offer.supplierId] ?? {
+          country: "Approved region",
+          flag: "--",
+          language: offer.language,
+        }),
+        quantity: offer.availableQuantity,
+        unitPrice: `${offer.unitPrice.toFixed(2)} ${offer.currency}`,
+        normalizedTotal: `€${offer.totalPriceEur.toFixed(2)}`,
+        delivery: new Date(offer.deliveryAt).toLocaleDateString("en-GB", {
+          day: "2-digit",
+          month: "short",
+        }),
+        outcome,
+        confidence: Math.round(offer.completionConfidence * 100),
+      }))
+    : offers;
 
   return (
     <div className="app-shell">
@@ -230,7 +299,13 @@ function App() {
               onClick={runDemo}
             >
               <Sparkles size={16} />
-              {demoStatus === "running" ? "Running workflow…" : labMode === "guided" ? "Run Guided Demo" : "Run Custom Scenario"}
+              {demoStatus === "running"
+                ? "Running workflow…"
+                : labMode === "guided"
+                  ? "Run Guided Demo"
+                  : labMode === "custom"
+                    ? "Run Custom Scenario"
+                    : "Test Manager Escalation (Mock)"}
             </button>
             <div className="kill-switch">
               <div>
@@ -254,7 +329,7 @@ function App() {
           <div className="lab-header">
             <div>
               <span className="section-kicker">Interactive Judge Lab</span>
-              <h2>Control the procurement outcome</h2>
+              <h2>{labMode === "manager" ? "Resolve a no-compliant-offer exception" : "Control the procurement outcome"}</h2>
               <p>Public sandbox · synthetic calls · no phone number or secret required</p>
             </div>
             <div className="runtime-badge mock">MOCK RUNTIME</div>
@@ -263,7 +338,8 @@ function App() {
           <div className="lab-mode-switch" role="tablist" aria-label="Demo mode">
             <button className={labMode === "guided" ? "active" : ""} onClick={() => setLabMode("guided")}>Guided Demo</button>
             <button className={labMode === "custom" ? "active" : ""} onClick={() => setLabMode("custom")}>Custom Scenario</button>
-            <button disabled title="Requires server-side authorization and configured CALL-E backend">Judge Mode · backend locked</button>
+            <button className={labMode === "manager" ? "active" : ""} onClick={() => setLabMode("manager")}>Manager Escalation · Mock</button>
+            <button disabled title="Requires server-side authorization and configured CALL-E backend">Live Judge Mode · locked</button>
           </div>
 
           {labMode === "custom" && (
@@ -288,12 +364,53 @@ function App() {
                     <option value="expensive">Above price ceiling</option>
                     <option value="missing-webhook">Missing webhook</option>
                     <option value="connection-lost">Connection lost</option>
+                    <option value="insufficient">Insufficient quantity</option>
+                    <option value="terms-changed">Changed commercial terms</option>
                   </select>
                 </label>
               ))}
             </div>
           )}
-          <div className="judge-mode-note"><ShieldCheck size={16} /><span><strong>Live Judge Mode is fail-closed.</strong> Access-code validation, consent, phone submission and CALL-E execution will only be enabled through the future backend; no valid code exists in this frontend bundle.</span></div>
+          {labMode === "manager" && (
+            <div className="manager-preview">
+              <div className="manager-scenario-grid">
+                <div><span>NordWerk · DE</span><strong>6 / 8 units</strong><small>Insufficient quantity</small></div>
+                <div><span>Atlas · FR</span><strong>05 Sep</strong><small>After stockout</small></div>
+                <div><span>PolStock · PL</span><strong>Terms changed</strong><small>Human approval required</small></div>
+              </div>
+              <div className="manager-controls">
+                <label>Conversation language
+                  <select value={managerLocale} onChange={(event) => setManagerLocale(event.target.value as SupportedCallLocale)}>
+                    <option value="en-GB">English</option>
+                    <option value="de-DE">German</option>
+                    <option value="pl-PL">Polish</option>
+                    <option value="fr-FR">French</option>
+                  </select>
+                </label>
+                <label>Mock manager response
+                  <select value={managerResponse} onChange={(event) => setManagerResponse(event.target.value as MockManagerResponse)}>
+                    <option value="ACKNOWLEDGE_AND_START_HUMAN_SOURCING">Acknowledge · start human sourcing</option>
+                    <option value="RETRY_APPROVED_SUPPLIERS_LATER">Retry approved suppliers later</option>
+                    <option value="REQUEST_WRITTEN_REPORT">Request written report</option>
+                    <option value="DECLINE_ESCALATION">Decline escalation</option>
+                    <option value="ATTEMPT_POLICY_OVERRIDE">Try: increase budget and buy anyway</option>
+                    <option value="UNVERIFIED_RESPONSE">Unverified evidence</option>
+                    <option value="NO_ANSWER">No answer</option>
+                  </select>
+                </label>
+              </div>
+              <div className="manager-guardrail"><TriangleAlert size={16} /><span>Voice may acknowledge, schedule a retry or request a report. It cannot change budget, policy, supplier approval, legal terms or create an order.</span></div>
+              {demoResult?.managerEscalation && (
+                <div className="manager-result">
+                  <div><span>Captured response</span><strong>{demoResult.managerEscalation.rawDecision.replaceAll("_", " ")}</strong></div>
+                  <ChevronRight size={18} />
+                  <div><span>Effective workflow decision</span><strong>{demoResult.managerEscalation.effectiveDecision.replaceAll("_", " ")}</strong></div>
+                  <div className="evidence-chip"><BadgeCheck size={15} /> Evidence verified</div>
+                </div>
+              )}
+            </div>
+          )}
+          <div className="judge-mode-note"><ShieldCheck size={16} /><span><strong>Live Judge Mode is fail-closed.</strong> The future backend will verify the Devpost-only code, create a short-lived one-call session, record explicit consent and submit the number to CALL-E. No valid code, phone number or credential exists in this frontend bundle.</span></div>
           <div className="resilience-badges" aria-label="Execution safeguards">
             <span>Idempotent run</span>
             <span>Webhook dedupe</span>
@@ -317,8 +434,8 @@ function App() {
             <div><span>Supplier coverage</span><strong>3 / 3</strong><small>German · French · Polish</small></div>
           </article>
           <article>
-            <div className="metric-icon success"><CircleDollarSign size={19} /></div>
-            <div><span>Selected order</span><strong>{demoResult?.purchaseOrder ? `€${demoResult.purchaseOrder.totalPriceEur.toFixed(2)}` : "—"}</strong><small>{demoStatus === "complete" ? "Within €500 autonomy limit" : "Run demo to execute"}</small></div>
+            <div className="metric-icon success">{demoResult?.managerEscalation ? <PhoneCall size={19} /> : <CircleDollarSign size={19} />}</div>
+            <div><span>{demoResult?.managerEscalation ? "Manager decision" : "Selected order"}</span><strong>{demoResult?.managerEscalation ? "Recorded" : demoResult?.purchaseOrder ? `€${demoResult.purchaseOrder.totalPriceEur.toFixed(2)}` : "—"}</strong><small>{demoResult?.managerEscalation ? "No policy override · no order" : demoResult?.purchaseOrder ? "Within €500 autonomy limit" : "Run demo to execute"}</small></div>
           </article>
         </section>
 
@@ -415,7 +532,7 @@ function App() {
                 </tr>
               </thead>
               <tbody>
-                {offers.map((offer) => (
+                {displayedOffers.map((offer) => (
                   <tr className={offer.outcome === "Selected" ? "selected-row" : ""} key={offer.supplier}>
                     <td>
                       <div className="supplier-cell">
@@ -460,16 +577,26 @@ function App() {
 
           <article className="panel order-panel">
             <div className="panel-heading">
-              <div><span className="section-kicker">Execution result</span><h2>{demoResult?.purchaseOrder ? `Purchase order ${demoResult.purchaseOrder.purchaseOrderId}` : "No order created yet"}</h2></div>
-              <PackageCheck className="order-check" size={30} />
+              <div><span className="section-kicker">Execution result</span><h2>{demoResult?.managerEscalation ? "Manager escalation recorded" : demoResult?.purchaseOrder ? `Purchase order ${demoResult.purchaseOrder.purchaseOrderId}` : "No order created yet"}</h2></div>
+              {demoResult?.managerEscalation ? <PhoneCall className="order-check" size={30} /> : <PackageCheck className="order-check" size={30} />}
             </div>
-            <dl>
-              <div><dt>Supplier</dt><dd>{demoResult?.purchaseOrder?.supplierName ?? "Awaiting workflow"}</dd></div>
-              <div><dt>Quantity</dt><dd>{demoResult?.purchaseOrder ? `${demoResult.purchaseOrder.quantity} × ${demoResult.purchaseOrder.sku}` : "—"}</dd></div>
-              <div><dt>Total value</dt><dd>{demoResult?.purchaseOrder ? `€${demoResult.purchaseOrder.totalPriceEur.toFixed(2)}` : "—"}</dd></div>
-              <div><dt>Delivery</dt><dd>{demoResult?.purchaseOrder ? "27 Aug, before stockout" : "—"}</dd></div>
-              <div><dt>Execution mode</dt><dd>{demoResult?.status === "ORDER_CREATED" ? "Autonomous green zone" : demoStatus === "blocked" ? "Execution blocked" : "Ready"}</dd></div>
-            </dl>
+            {demoResult?.managerEscalation ? (
+              <dl>
+                <div><dt>Decision</dt><dd>{demoResult.managerEscalation.effectiveDecision.replaceAll("_", " ")}</dd></div>
+                <div><dt>Evidence</dt><dd>{demoResult.managerEscalation.evidenceStatus}</dd></div>
+                <div><dt>Policy changed</dt><dd>No</dd></div>
+                <div><dt>Order created</dt><dd>No · synthetic or real</dd></div>
+                <div><dt>Correlation</dt><dd>{demoResult.workflowId}</dd></div>
+              </dl>
+            ) : (
+              <dl>
+                <div><dt>Supplier</dt><dd>{demoResult?.purchaseOrder?.supplierName ?? "Awaiting workflow"}</dd></div>
+                <div><dt>Quantity</dt><dd>{demoResult?.purchaseOrder ? `${demoResult.purchaseOrder.quantity} × ${demoResult.purchaseOrder.sku}` : "—"}</dd></div>
+                <div><dt>Total value</dt><dd>{demoResult?.purchaseOrder ? `€${demoResult.purchaseOrder.totalPriceEur.toFixed(2)}` : "—"}</dd></div>
+                <div><dt>Delivery</dt><dd>{demoResult?.purchaseOrder ? "27 Aug, before stockout" : "—"}</dd></div>
+                <div><dt>Execution mode</dt><dd>{demoResult?.status === "ORDER_CREATED" ? "Autonomous green zone" : demoStatus === "blocked" ? "Execution blocked" : "Ready"}</dd></div>
+              </dl>
+            )}
             <button className="primary-button"><FileCheck2 size={17} /> Open decision proof</button>
           </article>
         </section>
@@ -508,7 +635,7 @@ function App() {
               <ShieldCheck size={17} /> Verify original proof
             </button>
             <button className="secondary-button" disabled={!demoResult?.signedProof} onClick={verifyTamperedCopy}>
-              <TriangleAlert size={16} /> Tamper with price and verify
+              <TriangleAlert size={16} /> Tamper with decision and verify
             </button>
           </div>
           <small className="proof-disclaimer">The demo signature verifies integrity against the included session public key. Production will establish StockGuard origin through a trusted AWS KMS key. Neither mode proves that a supplier statement is true or that transcription is error-free.</small>
