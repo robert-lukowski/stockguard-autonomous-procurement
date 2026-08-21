@@ -10,6 +10,9 @@ on:
       - "vite.config.ts"
       - "eslint.config.js"
       - ".github/workflows/frontend-ci.yml"
+      - ".github/workflows/aws-readonly-inventory.yml"
+      - "infrastructure/**"
+      - "scripts/**"
   workflow_dispatch:
 
 permissions:
@@ -39,6 +42,12 @@ jobs:
 
       - name: Lint
         run: npm run lint
+
+      - name: Validate AWS read-only bootstrap
+        run: npm run validate:aws-bootstrap
+
+      - name: Test sanitized AWS inventory
+        run: npm run test:aws-inventory
 
       - name: Test
         run: npm run test

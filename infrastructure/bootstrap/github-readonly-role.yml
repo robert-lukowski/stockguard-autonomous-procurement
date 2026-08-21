@@ -1,0 +1,66 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  StockGuard GitHub Actions read-only discovery role. This stack creates IAM
+  resources only and assumes that the account-level GitHub OIDC provider exists.
+
+Parameters:
+  AllowedRegion:
+    Type: String
+    Default: eu-central-1
+    AllowedPattern: "^[a-z]{2}(-gov)?-[a-z]+-[0-9]$"
+    Description: AWS Region containing the existing Amazon Connect sandbox.
+
+Resources:
+  StockGuardGitHubReadOnlyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: stockguard-github-readonly
+      Description: Read-only Amazon Connect inventory for StockGuard GitHub Actions.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: GitHubOidcFromStockGuardMainOnly
+            Effect: Allow
+            Principal:
+              Federated: !Sub >-
+                arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: >-
+                  repo:robert-lukowski@207513888/stockguard-autonomous-procurement@1341560793:ref:refs/heads/main
+      Policies:
+        - PolicyName: stockguard-connect-readonly-inventory
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadOnlyConnectInventoryInSandboxRegion
+                Effect: Allow
+                Action:
+                  - connect:ListBots
+                  - connect:ListContactFlows
+                  - connect:ListInstances
+                  - connect:ListIntegrationAssociations
+                  - connect:ListLambdaFunctions
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref AllowedRegion
+      Tags:
+        - Key: Project
+          Value: stockguard-autonomous-procurement
+        - Key: Environment
+          Value: hackathon-sandbox
+        - Key: Access
+          Value: read-only
+
+Outputs:
+  ReadOnlyRoleArn:
+    Description: Store this value as the GitHub Actions variable AWS_ROLE_ARN.
+    Value: !GetAtt StockGuardGitHubReadOnlyRole.Arn
+  ImmutableGitHubSubject:
+    Description: Exact immutable GitHub OIDC subject allowed to assume the role.
+    Value: >-
+      repo:robert-lukowski@207513888/stockguard-autonomous-procurement@1341560793:ref:refs/heads/main
