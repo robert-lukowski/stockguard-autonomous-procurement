@@ -196,9 +196,17 @@ td { padding: 11px 10px; border-bottom: 1px solid #edf1ef; white-space: nowrap; 
 
 .lower-grid { grid-template-columns: 1.45fr 1fr; }
 .validation-score { display: flex; align-items: center; gap: 6px; color: var(--green); background: var(--green-soft); border-radius: 8px; padding: 8px 10px; font-size: 11px; font-weight: 800; }
+.validation-score.block { color: var(--red); background: var(--red-soft); }
+.validation-score.requires_human { color: var(--amber); background: var(--amber-soft); }
 .checks-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
 .checks-grid div { display: flex; align-items: center; gap: 7px; color: #42534b; font-size: 10px; }
 .checks-grid svg { color: var(--green); flex: 0 0 auto; }
+.checks-grid .rule-check.fail svg { color: var(--red); }
+.checks-grid .rule-check.requires-human svg { color: var(--amber); }
+.rule-check span, .rule-check small { display: block; }
+.rule-check small { margin-top: 2px; color: var(--muted); font-size: 8px; }
+.rule-check.fail small { color: var(--red); }
+.rule-check.requires-human small { color: var(--amber); }
 .order-panel { background: linear-gradient(145deg, #fff, #f4fbf7); }
 .order-check { color: var(--green); }
 dl { margin: 0; display: grid; gap: 8px; }
