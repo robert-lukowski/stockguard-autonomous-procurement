@@ -18,10 +18,19 @@ describe("cryptographic decision proof", () => {
       policyVersion: "policy-v1",
       policyHash: await sha256({ version: "policy-v1" }),
       offerHashes: { "supplier-de-01": await sha256(offer) },
+      evidenceHashes: { "supplier-de-01": await sha256({ unitPrice: "VERIFIED" }) },
       selectedSupplierId: "supplier-de-01",
       selectedOfferId: "offer-1",
       passedChecks: ["budget"],
       rejectedSuppliers: [],
+      ruleTrace: [
+        {
+          supplierId: "supplier-de-01",
+          checks: [
+            { id: "budget", status: "PASS", evidence: "within limit", inputs: { total: 336 } },
+          ],
+        },
+      ],
       orderValueEur: 336,
       auditChain,
     });
