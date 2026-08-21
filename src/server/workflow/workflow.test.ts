@@ -304,7 +304,8 @@ describe("ProcurementWorkflow", () => {
       }),
     );
 
-    expect(result.status).toBe("HUMAN_EXCEPTION_REQUIRED");
+    expect(result.status).toBe("HUMAN_ESCALATION_REQUIRED");
+    expect(result.workflowState).toBe("HUMAN_ESCALATION_REQUIRED");
     expect(result.auditTimeline.some(({ type }) => type === "CALL_TIMEOUT")).toBe(true);
     expect(result.decision?.rejectedOffers[0].offer.attemptCount).toBe(1);
   });
