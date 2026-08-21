@@ -11,6 +11,7 @@ import type {
   SupportedCallRegion,
 } from "../calle";
 import type { SignedDecisionProof } from "../../security";
+import type { WorkflowState, WorkflowStateEvent } from "./stateMachine";
 
 export type SupplierContact = {
   supplierId: string;
@@ -95,6 +96,8 @@ export type WorkflowResult = {
   proof: DecisionProof | null;
   auditTimeline: AuditEvent[];
   signedProof?: SignedDecisionProof;
+  workflowState: WorkflowState;
+  stateHistory: WorkflowStateEvent[];
 };
 
 export function toSupplierCallRequest(
