@@ -415,11 +415,25 @@ export async function runDemoWorkflow(
   return signWorkflowResult(result, input);
 }
 
-export async function runManagerEscalationDemo(
-  response: MockManagerResponse,
-  locale: SupportedCallLocale = "en-GB",
+/**
+ * Build the exact workflow input used by the guided judge walkthrough.
+ *
+ * Exposed so the UI can render the real shortage forecast and RFQ routing
+ * before any supplier call is attempted, instead of restating them as copy.
+ */
+export function buildJudgeInput(): WorkflowInput {
+  return createInput(true, managerEscalationScenario);
+}
+
+/**
+ * Run only the supplier-contact half of the walkthrough.
+ *
+ * Returns the genuine `WorkflowResult`, so the offer table, the policy
+ * rule trace and the audit timeline are all derived from one execution.
+ */
+export async function runJudgeSupplierPhase(
+  input: WorkflowInput,
 ): Promise<WorkflowResult> {
-  const input = createInput(true, managerEscalationScenario);
   const procurement = new ProcurementWorkflow(
     new MockCallEAdapter(
       await supplierSimulatorResults(
@@ -430,7 +444,19 @@ export async function runManagerEscalationDemo(
     new MockPurchaseOrderAdapter(),
     demoClock,
   );
-  const baseResult = await procurement.run(input);
+  return procurement.run(input);
+}
+
+/**
+ * Run the bounded manager escalation on top of an existing supplier phase and
+ * sign the resulting Decision Proof.
+ */
+export async function runJudgeEscalation(
+  input: WorkflowInput,
+  baseResult: WorkflowResult,
+  response: MockManagerResponse,
+  locale: SupportedCallLocale = "en-GB",
+): Promise<WorkflowResult> {
   const sessionId = `mock-judge-${input.workflowId}`;
   const phoneE164 = "+15550109999";
   const request = {
@@ -469,6 +495,15 @@ export async function runManagerEscalationDemo(
     killSwitchActive: false,
   });
   return signWorkflowResult(result, input);
+}
+
+export async function runManagerEscalationDemo(
+  response: MockManagerResponse,
+  locale: SupportedCallLocale = "en-GB",
+): Promise<WorkflowResult> {
+  const input = buildJudgeInput();
+  const baseResult = await runJudgeSupplierPhase(input);
+  return runJudgeEscalation(input, baseResult, response, locale);
 }
 
 export async function runSupplierSimulatorDemo(): Promise<WorkflowResult> {
