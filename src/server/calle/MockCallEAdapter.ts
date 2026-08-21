@@ -6,6 +6,7 @@ import type {
   SupplierCallTask,
 } from "./types";
 import { validateCallAuthorization } from "./safety";
+import { validateSupplierCallResult } from "./validateStructuredResult";
 
 export type MockSupplierResult = Omit<
   SupplierCallStructuredResult,
@@ -70,21 +71,49 @@ export class MockCallEAdapter implements SupplierCallingPort {
       this.tasks.set(callId, configuredTask);
       return configuredTask;
     }
+    const structuredResult: SupplierCallStructuredResult = {
+      supplierId: request.supplierId,
+      language: request.locale,
+      ...result,
+    };
+    const validation = validateSupplierCallResult(structuredResult);
+    const evidenceFields = [
+      "skuConfirmed",
+      "availableQuantity",
+      "unitPrice",
+      "currency",
+      "deliveryAt",
+      "offerValidUntil",
+      "commercialTermsChanged",
+    ] as const;
+    const fieldEvidence = Object.fromEntries(
+      evidenceFields.filter((field) => structuredResult[field] !== null)
+        .map((field) => [
+          field,
+          {
+            field,
+            source: "transcript" as const,
+            excerpt: `Synthetic transcript evidence confirms ${field}: ${String(structuredResult[field])}`,
+            verified: true,
+          },
+        ]),
+    );
     const task: SupplierCallTask = {
       callId,
       status: "completed",
       taskCompleted: true,
       completionConfidence: 0.95,
-      structuredResult: {
-        supplierId: request.supplierId,
-        language: request.locale,
-        ...result,
-      },
+      structuredResult: validation.result,
       evidence: [
         "AI disclosure acknowledged",
         "Supplier availability response captured",
         "No binding order was created during the call",
       ],
+      fieldEvidence,
+      schemaValidation: {
+        valid: validation.valid,
+        issues: validation.issues,
+      },
     };
 
     this.tasks.set(callId, task);
