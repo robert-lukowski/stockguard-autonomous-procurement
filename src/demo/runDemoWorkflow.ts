@@ -24,6 +24,7 @@ import type { SupportedCallLocale } from "../server/calle";
 import {
   InMemorySyntheticSupplierStore,
   SupplierSimulatorService,
+  syntheticSupplierProfiles,
   toMockSupplierResult,
   type SupplierProfileId,
   type SyntheticRfq,
@@ -244,16 +245,25 @@ async function supplierSimulatorResults(
   input: WorkflowInput,
   requestedQuantity: number,
 ): Promise<Record<string, MockSupplierResult>> {
-  const rfqs: SyntheticRfq[] = input.suppliers.map((supplier) => ({
-    runId: input.workflowId,
-    rfqId: `RFQ-${supplier.region}-${input.workflowId}`,
-    profileId: simulatorProfileBySupplier[supplier.supplierId],
-    sku: input.inventory.sku,
-    requestedQuantity,
-    requiredBy: input.inventory.stockoutAt,
-  }));
+  const rfqs: SyntheticRfq[] = input.suppliers.map((supplier) => {
+    if (!supplier.syntheticRouting) {
+      throw new Error("Synthetic supplier demo requires explicit RFQ routing");
+    }
+    return {
+      runId: input.workflowId,
+      rfqId: supplier.syntheticRouting.rfqId,
+      routingCode: supplier.syntheticRouting.routingCode,
+      profileId: supplier.syntheticRouting.supplierProfileId,
+      datasetVersion: supplier.syntheticRouting.datasetVersion,
+      sku: input.inventory.sku,
+      requestedQuantity,
+      requiredBy: input.inventory.stockoutAt,
+      expiresAt: "2026-08-21T11:30:00Z",
+    };
+  });
   const simulator = new SupplierSimulatorService(
     new InMemorySyntheticSupplierStore(undefined, rfqs),
+    demoClock,
   );
   return Object.fromEntries(
     await Promise.all(
@@ -273,7 +283,22 @@ function createInput(
   autonomousExecutionEnabled: boolean,
   scenario: DemoScenario,
 ): WorkflowInput {
-  const workflowId = `wf-demo-${Date.now()}`;
+  const workflowSequence = Date.now();
+  const workflowId = `wf-demo-${workflowSequence}`;
+  const runtimeSuppliers = suppliers.map((supplier, index) => {
+    const profileId = simulatorProfileBySupplier[supplier.supplierId];
+    const routingCode = `${index + 1}${String(workflowSequence % 100_000).padStart(5, "0")}`;
+    return {
+      ...supplier,
+      syntheticRouting: {
+        kind: "SYNTHETIC_SUPPLIER_SIMULATOR" as const,
+        rfqId: `RFQ-${supplier.region}-${workflowId}`,
+        routingCode,
+        supplierProfileId: profileId,
+        datasetVersion: syntheticSupplierProfiles[profileId].datasetVersion,
+      },
+    };
+  });
 
   return {
     workflowId,
@@ -285,15 +310,15 @@ function createInput(
       safetyStock: 2,
       stockoutAt: scenario.stockoutAt,
     },
-    suppliers,
+    suppliers: runtimeSuppliers,
     callAuthorization: {
       workflowId,
       approvedBy: "demo-operator",
       approvedAt: "2026-08-21T09:00:00Z",
       expiresAt: "2099-08-21T10:00:00Z",
       maximumCalls: 3,
-      allowedSupplierIds: suppliers.map(({ supplierId }) => supplierId),
-      allowedPhoneNumbers: suppliers.map(({ phoneE164 }) => phoneE164),
+      allowedSupplierIds: runtimeSuppliers.map(({ supplierId }) => supplierId),
+      allowedPhoneNumbers: runtimeSuppliers.map(({ phoneE164 }) => phoneE164),
     },
     procurementPolicy: {
       ...policy,

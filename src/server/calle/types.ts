@@ -3,6 +3,14 @@ import type { Currency } from "../../domain";
 export type SupportedCallRegion = "DE" | "FR" | "PL" | "GB" | "US";
 export type SupportedCallLocale = "de-DE" | "fr-FR" | "pl-PL" | "en-GB" | "en-US";
 
+export type SyntheticSupplierRouting = {
+  kind: "SYNTHETIC_SUPPLIER_SIMULATOR";
+  rfqId: string;
+  routingCode: string;
+  supplierProfileId: "DE_SUPPLIER" | "FR_SUPPLIER" | "PL_SUPPLIER";
+  datasetVersion: string;
+};
+
 export type SupplierCallRequest = {
   workflowId: string;
   attemptNumber: number;
@@ -15,6 +23,7 @@ export type SupplierCallRequest = {
   requestedQuantity: number;
   requiredBy: string;
   consentVerified: boolean;
+  syntheticRouting?: SyntheticSupplierRouting;
 };
 
 export type CallAuthorization = {

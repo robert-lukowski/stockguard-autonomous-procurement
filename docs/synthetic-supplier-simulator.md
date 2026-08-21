@@ -23,7 +23,7 @@ flowchart TD
   HM --> DP[Signed Decision Proof]
 ```
 
-The supplier calls and manager escalation share one StockGuard `runId`. The RFQ is the correlation key across CALL-E metadata, Connect session attributes, Lambda lookup, structured result, rule trace, audit chain and Decision Proof.
+The supplier calls and manager escalation share one StockGuard `runId`. The RFQ is the correlation key across CALL-E metadata, Connect session attributes, Lambda lookup, structured result, rule trace, audit chain and Decision Proof. A six-digit routing code is only a short-lived locator for the RFQ; it is not authentication, approval or a secret.
 
 ## Runtime classification
 
@@ -41,15 +41,18 @@ The public GitHub Pages sandbox remains independent of CALL-E and AWS availabili
 
 A PSTN call does not carry the intended synthetic supplier locale. The one-number design therefore uses two explicit stages:
 
-1. CALL-E states a short synthetic RFQ code in the routing locale `en_GB`.
-2. The `IdentifySyntheticRfq` intent resolves the approved RFQ and profile.
-3. Lambda returns `targetLocale` in Lex session attributes.
-4. The Connect flow branches on `targetLocale`.
-5. A **Set voice** block sets the matching language attribute.
-6. Connect invokes the same versioned Lex V2 bot/alias in `de_DE`, `fr_FR` or `pl_PL`.
-7. The localized bot handles the quote and follow-up intents.
+1. The server creates a short-lived synthetic RFQ and atomically reserves a unique six-digit routing code.
+2. The CALL-E task contains the routing code, RFQ ID, expected profile and dataset version. No telephone number or credential is placed in metadata.
+3. CALL-E states the digits individually at the initial routing prompt in `en_GB`.
+4. The `IdentifySyntheticRfq` intent resolves the active RFQ and approved profile from the code.
+5. An expired code, profile mismatch or dataset-version mismatch fails closed.
+6. Lambda returns `targetLocale` in Lex session attributes.
+7. The Connect flow branches on `targetLocale`.
+8. A **Set voice** block sets the matching language attribute.
+9. Connect invokes the same versioned Lex V2 bot/alias in `de_DE`, `fr_FR` or `pl_PL`.
+10. The localized bot handles the quote and follow-up intents.
 
-This avoids an unsupported assumption that Connect automatically detects the supplier language. An unknown RFQ, profile mismatch, unexpected bot/alias or locale closes the synthetic conversation without returning quote data.
+This avoids an unsupported assumption that Connect automatically detects the supplier language. An unknown RFQ, profile mismatch, stale dataset, unexpected bot/alias or locale closes the synthetic conversation without returning quote data. Whether CALL-E reliably speaks the English routing phrase and then continues in the target language remains a live qualification item; the code does not present it as verified before an approved real-call test.
 
 Amazon Lex V2 currently lists German `de_DE`, French `fr_FR` and Polish `pl_PL` as supported locales. Amazon Connect requires its language attribute to match the Lex V2 language model. These capabilities were checked on 2026-08-21 against the official [Lex V2 locale list](https://docs.aws.amazon.com/lexv2/latest/dg/how-languages.html) and [Connect–Lex setup guide](https://docs.aws.amazon.com/connect/latest/adminguide/amazon-lex.html).
 
@@ -75,7 +78,19 @@ The data layer supports controlled pre-test states:
 - `OFFER_EXPIRED`
 - `CHANGED_PAYMENT_TERMS`
 
-The state belongs to the Lambda data source, not a hard-coded Lex prompt. The current repository uses an in-memory store for tests. A future deployed adapter may use DynamoDB with versioned synthetic records and conditional updates.
+The state belongs to the Lambda data source, not a hard-coded Lex prompt. The public demo uses an in-memory store. An SDK-independent DynamoDB adapter is also implemented and tested but not deployed.
+
+The DynamoDB contract uses:
+
+- `SYNTHETIC_PROFILE#{profileId}` records for current versioned profiles;
+- `SYNTHETIC_RFQ#{rfqId}` records for full correlation context;
+- `SYNTHETIC_ROUTING#{routingCode}` records for the spoken-code lookup;
+- one transactional write to reserve both RFQ keys without a partial mapping;
+- DynamoDB TTL plus an application-level expiry check;
+- a strongly consistent read for the qualification flow;
+- conditional profile replacement using the expected `datasetVersion`.
+
+An RFQ pins the profile dataset version. If a profile changes after RFQ creation, the old RFQ is rejected rather than silently producing a quote from different data. The profile is changed first, then a new short-lived RFQ is created for the controlled test.
 
 ## Lex intents and follow-up behavior
 
@@ -96,12 +111,18 @@ The handler returns `ElicitIntent` after informational answers, so CALL-E can as
 
 - typed synthetic profiles, RFQs, quotes, states and locales;
 - a replaceable `SyntheticSupplierStore` port;
+- an optional `SyntheticSupplierAdminPort` for conditional RFQ/profile changes;
+- an undeployed `DynamoSyntheticSupplierStore` command adapter;
 - deterministic state-to-quote generation;
 - localized intent-specific answers;
 - a two-stage Lex V2 handler contract;
 - allowlists for bot ID, alias ID and locale;
 - fail-closed behavior for disabled, unknown or mismatched context;
 - `runId`, RFQ, profile and dataset-version propagation in session attributes;
+- an explicit CALL-E simulator target that is valid only for the configured,
+  allowlisted Connect test number;
+- rejection of a simulator number with missing routing context, a disabled
+  simulator, malformed code or non-allowlisted profile;
 - conversion into the existing mock CALL-E result path;
 - automated tests for follow-ups, profile overrides, routing and default rejection causes.
 
@@ -126,12 +147,13 @@ Before any live AWS/CALL-E test:
 
 ## Remaining live work
 
-1. Define infrastructure as code for Connect, the versioned multi-locale Lex bot, Lambda and synthetic data storage.
-2. Review the plan and estimated charges before deployment.
-3. Create the controlled number only after explicit approval.
-4. Connect CALL-E server-side and verify its exact webhook/authenticity mechanism.
-5. Run one consented qualification call per locale, beginning with two locales.
-6. Verify latency, speech recognition, interruption, follow-up, voicemail and timeout behavior.
-7. Enable the manager call only after backend session, rate-limit, budget and kill-switch controls are active.
+1. Add the AWS SDK command facade and composition root for the already-tested DynamoDB adapter.
+2. Define infrastructure as code for Connect, the versioned multi-locale Lex bot, Lambda and synthetic data storage.
+3. Review the plan and estimated charges before deployment.
+4. Create the controlled number only after explicit approval.
+5. Connect CALL-E server-side and verify its exact webhook/authenticity mechanism.
+6. Run one consented qualification call per locale, beginning with two locales.
+7. Verify routing-code recognition, language transition, latency, interruption, follow-up, voicemail and timeout behavior.
+8. Enable the manager call only after backend session, rate-limit, budget and kill-switch controls are active.
 
 No AWS resource, telephone number, secret or real call is created by the current implementation.

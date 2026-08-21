@@ -7,6 +7,7 @@ import type {
 import type {
   CallAuthorization,
   SupplierCallRequest,
+  SyntheticSupplierRouting,
   SupportedCallLocale,
   SupportedCallRegion,
 } from "../calle";
@@ -22,6 +23,7 @@ export type SupplierContact = {
   locale: SupportedCallLocale;
   approved: boolean;
   consentVerified: boolean;
+  syntheticRouting?: SyntheticSupplierRouting;
 };
 
 export type WorkflowInput = {
@@ -145,5 +147,8 @@ export function toSupplierCallRequest(
     requestedQuantity: requiredQuantity,
     requiredBy: input.inventory.stockoutAt,
     consentVerified: supplier.consentVerified,
+    ...(supplier.syntheticRouting
+      ? { syntheticRouting: structuredClone(supplier.syntheticRouting) }
+      : {}),
   };
 }

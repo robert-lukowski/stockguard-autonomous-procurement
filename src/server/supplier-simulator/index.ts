@@ -2,6 +2,7 @@ export {
   SupplierSimulatorService,
   toMockSupplierResult,
 } from "./SupplierSimulatorService";
+export { DynamoSyntheticSupplierStore } from "./DynamoSyntheticSupplierStore";
 export {
   InMemorySyntheticSupplierStore,
   syntheticSupplierProfiles,
@@ -19,7 +20,9 @@ export type {
   SupplierSimulatorIntent,
   SupplierSimulatorRequest,
   SupplierSimulatorResponse,
+  SyntheticProfileUpdate,
   SyntheticRfq,
+  SyntheticSupplierAdminPort,
   SyntheticSupplierProfile,
   SyntheticSupplierQuote,
   SyntheticSupplierState,

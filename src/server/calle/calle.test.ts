@@ -120,6 +120,73 @@ describe("CallEApiAdapter", () => {
     expect(options.headers["Idempotency-Key"]).toBe(
       "wf-2026-081:supplier-de-01:attempt:1",
     );
+    expect(body.metadata.counterparty_mode).toBe("approved-supplier");
+  });
+
+  it("routes an allowlisted synthetic RFQ through the configured Connect number", async () => {
+    const fetchImplementation = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ call_id: "call-simulator-01", status: "queued" }),
+        { status: 200 },
+      ),
+    );
+    const syntheticRequest: SupplierCallRequest = {
+      ...request,
+      syntheticRouting: {
+        kind: "SYNTHETIC_SUPPLIER_SIMULATOR",
+        rfqId: "RFQ-DE-081",
+        routingCode: "281001",
+        supplierProfileId: "DE_SUPPLIER",
+        datasetVersion: "synthetic-suppliers-2026-08-v1",
+      },
+    };
+    const adapter = new CallEApiAdapter({
+      apiKey: "test-only",
+      realCallsEnabled: true,
+      fetchImplementation,
+      syntheticSupplierSimulator: {
+        enabled: true,
+        phoneE164: request.phoneE164,
+        allowedProfileIds: ["DE_SUPPLIER"],
+      },
+    });
+
+    await adapter.startSupplierCall(syntheticRequest, authorization);
+
+    const [, options] = fetchImplementation.mock.calls[0];
+    const body = JSON.parse(options.body as string);
+    expect(body.task).toContain("routing code 2 8 1 0 0 1");
+    expect(body.metadata).toMatchObject({
+      workflow_run_id: request.workflowId,
+      counterparty_mode: "synthetic-supplier-simulator",
+      synthetic_rfq_id: "RFQ-DE-081",
+      synthetic_routing_code: "281001",
+      synthetic_supplier_profile: "DE_SUPPLIER",
+    });
+  });
+
+  it("fails closed when simulator routing is not explicitly enabled", async () => {
+    const adapter = new CallEApiAdapter({
+      apiKey: "test-only",
+      realCallsEnabled: true,
+      fetchImplementation: vi.fn(),
+    });
+
+    await expect(
+      adapter.startSupplierCall(
+        {
+          ...request,
+          syntheticRouting: {
+            kind: "SYNTHETIC_SUPPLIER_SIMULATOR",
+            rfqId: "RFQ-DE-081",
+            routingCode: "281001",
+            supplierProfileId: "DE_SUPPLIER",
+            datasetVersion: "synthetic-suppliers-2026-08-v1",
+          },
+        },
+        authorization,
+      ),
+    ).rejects.toMatchObject({ code: "SYNTHETIC_SIMULATOR_DISABLED" });
   });
 
   it("quarantines an invalid structured result from the policy workflow", async () => {

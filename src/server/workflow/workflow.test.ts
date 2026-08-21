@@ -7,6 +7,7 @@ import {
   MockCallEAdapter,
   type CallAuthorization,
   type SupplierCallingPort,
+  type SupplierCallRequest,
 } from "../calle";
 import {
   MockPurchaseOrderAdapter,
@@ -364,5 +365,54 @@ describe("ProcurementWorkflow", () => {
     expect(
       result.auditTimeline.some(({ type }) => type === "CALL_RETRY_SCHEDULED"),
     ).toBe(true);
+  });
+
+  it("preserves synthetic RFQ routing from workflow planning through the audit", async () => {
+    const baseAdapter = new MockCallEAdapter();
+    let capturedRequest: SupplierCallRequest | null = null;
+    const routing = {
+      kind: "SYNTHETIC_SUPPLIER_SIMULATOR" as const,
+      rfqId: "RFQ-DE-081",
+      routingCode: "281001",
+      supplierProfileId: "DE_SUPPLIER" as const,
+      datasetVersion: "synthetic-suppliers-2026-08-v1",
+    };
+    const supplier = { ...suppliers[0], syntheticRouting: routing };
+    const adapter: SupplierCallingPort = {
+      async startSupplierCall(callRequest, callAuthorization) {
+        capturedRequest = structuredClone(callRequest);
+        return baseAdapter.startSupplierCall(callRequest, callAuthorization);
+      },
+      getSupplierCall(callId) {
+        return baseAdapter.getSupplierCall(callId);
+      },
+    };
+    const workflow = new ProcurementWorkflow(
+      adapter,
+      new MockPurchaseOrderAdapter(),
+      () => new Date("2026-08-21T09:42:00Z"),
+    );
+
+    const result = await workflow.run(
+      workflowInput({
+        suppliers: [supplier],
+        callAuthorization: {
+          ...authorization,
+          maximumCalls: 1,
+          allowedSupplierIds: [supplier.supplierId],
+          allowedPhoneNumbers: [supplier.phoneE164],
+        },
+      }),
+    );
+
+    expect(capturedRequest).toMatchObject({ syntheticRouting: routing });
+    expect(
+      result.auditTimeline.find(({ type }) => type === "CALL_COMPLETED")?.evidence,
+    ).toMatchObject({
+      counterpartyMode: "SYNTHETIC_SUPPLIER_SIMULATOR",
+      rfqId: "RFQ-DE-081",
+      supplierProfileId: "DE_SUPPLIER",
+      datasetVersion: "synthetic-suppliers-2026-08-v1",
+    });
   });
 });
