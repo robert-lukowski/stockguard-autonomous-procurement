@@ -9,6 +9,7 @@ import {
 
 const request: SupplierCallRequest = {
   workflowId: "wf-2026-081",
+  attemptNumber: 1,
   supplierId: "supplier-de-01",
   supplierName: "NordWerk Supply",
   phoneE164: "+15550100001",
@@ -117,7 +118,7 @@ describe("CallEApiAdapter", () => {
     });
     expect(body.recipient_result_schema.required).toContain("unitPrice");
     expect(options.headers["Idempotency-Key"]).toBe(
-      "wf-2026-081:supplier-de-01",
+      "wf-2026-081:supplier-de-01:attempt:1",
     );
   });
 
