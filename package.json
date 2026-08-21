@@ -13,10 +13,13 @@
     "test:aws-inventory": "node scripts/test-aws-readonly-inventory.mjs"
   },
   "dependencies": {
+    "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^4.3.4",
     "lucide-react": "^0.468.0",
+    "motion": "^13.1.1",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "tailwindcss": "^4.3.3"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
