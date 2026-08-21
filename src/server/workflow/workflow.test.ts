@@ -108,7 +108,9 @@ describe("ProcurementWorkflow", () => {
       totalPriceEur: 336,
       environment: "synthetic",
     });
-    expect(result.proof?.passedChecks).toHaveLength(12);
+    expect(result.proof?.passedChecks).toHaveLength(13);
+    expect(result.proof?.ruleTrace).toHaveLength(3);
+    expect(result.workflowState).toBe("ORDER_PREPARED");
     expect(result.proof?.rejectedSupplierIds).toEqual([
       "supplier-fr-01",
       "supplier-pl-01",
