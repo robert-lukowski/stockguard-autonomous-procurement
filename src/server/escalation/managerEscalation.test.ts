@@ -130,6 +130,15 @@ describe("ManagerEscalationWorkflow", () => {
     expect(result.signedProof?.payload.managerEscalation?.effectiveDecision).toBe(
       "ACKNOWLEDGE_AND_START_HUMAN_SOURCING",
     );
+    const rejectionTrace = Object.fromEntries(
+      result.decision?.rejectedOffers.map(({ offer, validation }) => [
+        offer.supplierId,
+        [...validation.failedCheckIds, ...validation.humanReviewCheckIds],
+      ]) ?? [],
+    );
+    expect(rejectionTrace["supplier-de-01"]).toContain("quantity_sufficient");
+    expect(rejectionTrace["supplier-fr-01"]).toContain("delivery_before_stockout");
+    expect(rejectionTrace["supplier-pl-01"]).toContain("commercial_terms_unchanged");
     expect(await verifyDecisionProof(result.signedProof!)).toMatchObject({ valid: true });
   });
 

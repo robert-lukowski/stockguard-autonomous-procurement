@@ -19,6 +19,8 @@ stateDiagram-v2
 
 Every organization, material, supplier, offer and order in this experience is fictional or synthetic.
 
+The three supplier-side calls may terminate in the controlled [Synthetic Supplier Simulator](synthetic-supplier-simulator.md). That component is a deterministic Amazon Connect/Lex/Lambda test harness, not a production supplier claim. The separate manager call remains the only Judge Mode interaction with the juror.
+
 ## Allowed voice decisions
 
 | Spoken intent | Effective result | Side effect |
@@ -93,6 +95,7 @@ flowchart TD
   API --> AUTH[Judge session Lambda]
   API --> FLOW[Workflow Lambda]
   FLOW --> CALLE[CALL-E outbound call]
+  CALLE --> SIM[Connect supplier simulator]
   CALLE --> HOOK[Webhook Lambda]
   AUTH --> DB[(DynamoDB with TTL)]
   FLOW --> DB
@@ -158,9 +161,10 @@ The record is a **cryptographically signed, machine-verifiable decision record w
 2. **Complete:** fail-closed frontend-to-backend contracts with no embedded access code.
 3. **Complete:** local backend core for PBKDF2 verification, opaque sessions, one-call claims, rate limiting, global budget and fail-closed webhooks.
 4. **Complete as undeployed contracts:** API Gateway/Lambda handlers, DynamoDB conditional-write adapters and the Secrets Manager access-code adapter.
-5. **Next:** add the AWS SDK composition root, infrastructure definition and deployment configuration, but do not deploy until explicitly authorized.
-6. **Next:** connect CALL-E credentials server-side and verify the exact webhook authenticity mechanism from official documentation.
-7. **Next:** run consented calls only to verified test participants and validate supported countries, latency, voicemail and transcript behavior.
-8. **Final:** enable the Devpost-only code, global call budget, kill switch, deletion control and KMS signer.
+5. **Complete as undeployed contracts:** deterministic supplier profiles, replaceable synthetic data store, localized follow-up service and fail-closed Lex V2 handler.
+6. **Next:** add the AWS SDK composition root and infrastructure definition for Judge Mode and the Supplier Simulator, but do not deploy until explicitly authorized.
+7. **Next:** connect CALL-E credentials server-side and verify the exact webhook authenticity mechanism from official documentation.
+8. **Next:** run consented calls only to verified test participants and validate supported countries, latency, voicemail and transcript behavior.
+9. **Final:** enable the Devpost-only code, global call budget, kill switch, deletion control and KMS signer.
 
 No live call or paid AWS resource is created by the current implementation.

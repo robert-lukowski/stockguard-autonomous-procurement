@@ -22,6 +22,13 @@ import {
 } from "../server/escalation";
 import type { SupportedCallLocale } from "../server/calle";
 import {
+  InMemorySyntheticSupplierStore,
+  SupplierSimulatorService,
+  toMockSupplierResult,
+  type SupplierProfileId,
+  type SyntheticRfq,
+} from "../server/supplier-simulator";
+import {
   createAuditChain,
   createSignedDecisionProof,
   sha256,
@@ -72,6 +79,8 @@ const exchangeRates: ExchangeRatesToEur = {
   USD: 0.86,
   GBP: 1.16,
 };
+
+const demoClock = () => new Date("2026-08-21T10:30:00Z");
 
 export type DemoCallOutcome =
   | "quote"
@@ -225,6 +234,41 @@ function scenarioResults(scenario: DemoScenario): Record<string, MockSupplierRes
   );
 }
 
+const simulatorProfileBySupplier: Record<string, SupplierProfileId> = {
+  "supplier-de-01": "DE_SUPPLIER",
+  "supplier-fr-01": "FR_SUPPLIER",
+  "supplier-pl-01": "PL_SUPPLIER",
+};
+
+async function supplierSimulatorResults(
+  input: WorkflowInput,
+  requestedQuantity: number,
+): Promise<Record<string, MockSupplierResult>> {
+  const rfqs: SyntheticRfq[] = input.suppliers.map((supplier) => ({
+    runId: input.workflowId,
+    rfqId: `RFQ-${supplier.region}-${input.workflowId}`,
+    profileId: simulatorProfileBySupplier[supplier.supplierId],
+    sku: input.inventory.sku,
+    requestedQuantity,
+    requiredBy: input.inventory.stockoutAt,
+  }));
+  const simulator = new SupplierSimulatorService(
+    new InMemorySyntheticSupplierStore(undefined, rfqs),
+  );
+  return Object.fromEntries(
+    await Promise.all(
+      rfqs.map(async (rfq) => {
+        const response = await simulator.respond({
+          intent: "GetSupplierQuote",
+          rfqId: rfq.rfqId,
+          profileId: rfq.profileId,
+        });
+        return [response.quote.supplierId, toMockSupplierResult(response.quote)];
+      }),
+    ),
+  );
+}
+
 function createInput(
   autonomousExecutionEnabled: boolean,
   scenario: DemoScenario,
@@ -338,6 +382,7 @@ export async function runDemoWorkflow(
   const workflow = new ProcurementWorkflow(
     new MockCallEAdapter(scenarioResults(scenario)),
     new MockPurchaseOrderAdapter(),
+    demoClock,
   );
 
   const input = createInput(autonomousExecutionEnabled, scenario);
@@ -351,8 +396,14 @@ export async function runManagerEscalationDemo(
 ): Promise<WorkflowResult> {
   const input = createInput(true, managerEscalationScenario);
   const procurement = new ProcurementWorkflow(
-    new MockCallEAdapter(scenarioResults(managerEscalationScenario)),
+    new MockCallEAdapter(
+      await supplierSimulatorResults(
+        input,
+        managerEscalationScenario.requiredQuantity,
+      ),
+    ),
     new MockPurchaseOrderAdapter(),
+    demoClock,
   );
   const baseResult = await procurement.run(input);
   const sessionId = `mock-judge-${input.workflowId}`;
@@ -379,6 +430,7 @@ export async function runManagerEscalationDemo(
   };
   const escalation = new ManagerEscalationWorkflow(
     new MockManagerEscalationAdapter(response),
+    demoClock,
   );
   const result = await escalation.run(baseResult, request, {
     sessionId,
@@ -391,4 +443,19 @@ export async function runManagerEscalationDemo(
     killSwitchActive: false,
   });
   return signWorkflowResult(result, input);
+}
+
+export async function runSupplierSimulatorDemo(): Promise<WorkflowResult> {
+  const input = createInput(true, managerEscalationScenario);
+  const workflow = new ProcurementWorkflow(
+    new MockCallEAdapter(
+      await supplierSimulatorResults(
+        input,
+        managerEscalationScenario.requiredQuantity,
+      ),
+    ),
+    new MockPurchaseOrderAdapter(),
+    demoClock,
+  );
+  return workflow.run(input);
 }
