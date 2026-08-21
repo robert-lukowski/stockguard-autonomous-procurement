@@ -44,7 +44,11 @@ export type CallClaimInput = {
 export type CallClaimResult =
   | { kind: "CLAIMED"; session: StoredJudgeSession; claim: StoredCallClaim }
   | { kind: "DUPLICATE"; session: StoredJudgeSession; claim: StoredCallClaim }
-  | { kind: "NOT_FOUND" | "TOKEN_INVALID" | "EXPIRED" | "CONSUMED" | "REVOKED" };
+  | { kind: "NOT_FOUND" }
+  | { kind: "TOKEN_INVALID" }
+  | { kind: "EXPIRED" }
+  | { kind: "CONSUMED" }
+  | { kind: "REVOKED" };
 
 export interface JudgeSessionStore {
   create(session: StoredJudgeSession): Promise<void>;
