@@ -23,7 +23,9 @@ The React 19 product dashboard currently provides:
 - SHA-256 audit chaining and an ECDSA-signed Decision Proof v2;
 - a framework-neutral, locally tested Judge Mode backend core;
 - API Gateway/Lambda handler contracts plus DynamoDB conditional-write and
-  Secrets Manager adapters, all still undeployed.
+  Secrets Manager adapters, all still undeployed;
+- a deterministic, multilingual Supplier Simulator domain service and
+  fail-closed Lex V2 handler contract for a future Amazon Connect test harness.
 
 The manager escalation preview demonstrates:
 
@@ -58,7 +60,11 @@ The local backend core implements these semantics through mockable ports. It use
 
 The repository now also contains framework-neutral API Gateway/Lambda handler contracts, DynamoDB command adapters for conditional session claims, rate limits, the global call budget and webhook deduplication, plus a Secrets Manager access-code adapter. They are tested as code only: no AWS SDK composition root, stack or resource has been deployed, and the live CALL-E path remains disabled. KMS signing still requires a live backend adapter.
 
+The no-compliant-offer demo now sources its three repeatable synthetic supplier profiles from a dedicated data service. A future Amazon Connect/Lex/Lambda deployment can expose the same profiles as a conversational test counterparty, including a follow-up about missing quantity. This is a test harness, not the claimed business value: production CALL-E calls would target supplier humans, sales desks, IVRs or existing telephony systems when no current API/EDI integration exists.
+
 See [Judge Mode — Manager Escalation](docs/judge-mode-manager-escalation.md) for the state model, API contract, proposed AWS deployment, guardrails, failure behavior and implementation roadmap.
+
+See [Synthetic Supplier Simulator](docs/synthetic-supplier-simulator.md) for the one-number multilingual routing design, deterministic profiles, Lex intents, runtime labels and live-deployment safeguards.
 
 ## Decision Proof wording
 

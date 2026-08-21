@@ -19,6 +19,7 @@ import {
   guidedScenario,
   runManagerEscalationDemo,
   runDemoWorkflow,
+  runSupplierSimulatorDemo,
   type DemoCallOutcome,
   type DemoScenario,
 } from "./demo/runDemoWorkflow";
@@ -124,6 +125,38 @@ const checks = [
   "Recipient consent verified",
 ];
 
+const exceptionJourney = [
+  "Detect shortage",
+  "Prepare RFQ",
+  "Contact synthetic suppliers",
+  "Collect and validate offers",
+  "Run Policy Gateway",
+  "No compliant offer",
+  "Escalate to manager",
+  "Verify signed Decision Proof",
+];
+
+const simulatorProfiles = [
+  {
+    id: "DE_SUPPLIER",
+    locale: "German · de_DE",
+    result: "70% available",
+    rejection: "Insufficient quantity",
+  },
+  {
+    id: "FR_SUPPLIER",
+    locale: "French · fr_FR",
+    result: "120% available · delivery +8d",
+    rejection: "Delivery after stockout",
+  },
+  {
+    id: "PL_SUPPLIER",
+    locale: "Polish · pl_PL",
+    result: "100% available · terms changed",
+    rejection: "Commercial policy review",
+  },
+];
+
 function StatusPill({ value }: { value: SupplierOffer["outcome"] }) {
   return <span className={`status-pill ${value.toLowerCase().replace(" ", "-")}`}>{value}</span>;
 }
@@ -150,7 +183,9 @@ function App() {
   >("idle");
   const [demoResult, setDemoResult] = useState<WorkflowResult | null>(null);
   const [proofVerification, setProofVerification] = useState<ProofVerification | null>(null);
-  const [labMode, setLabMode] = useState<"guided" | "custom" | "manager">("guided");
+  const [labMode, setLabMode] = useState<
+    "guided" | "custom" | "simulator" | "manager"
+  >("guided");
   const [scenario, setScenario] = useState<DemoScenario>(structuredClone(guidedScenario));
   const [managerResponse, setManagerResponse] = useState<MockManagerResponse>("ACKNOWLEDGE_AND_START_HUMAN_SOURCING");
   const [managerLocale, setManagerLocale] = useState<SupportedCallLocale>("en-GB");
@@ -163,10 +198,12 @@ function App() {
     try {
       const result = labMode === "manager"
         ? await runManagerEscalationDemo(managerResponse, managerLocale)
-        : await runDemoWorkflow(
-            autonomyEnabled,
-            labMode === "guided" ? guidedScenario : scenario,
-          );
+        : labMode === "simulator"
+          ? await runSupplierSimulatorDemo()
+          : await runDemoWorkflow(
+              autonomyEnabled,
+              labMode === "guided" ? guidedScenario : scenario,
+            );
       setDemoResult(result);
       if (result.signedProof) {
         setProofVerification(await verifyDecisionProof(result.signedProof));
@@ -174,7 +211,8 @@ function App() {
       setDemoStatus(
         result.status === "ORDER_CREATED" ||
           result.status === "ESCALATION_RECORDED" ||
-          result.status === "AUTHENTICATED_APPROVAL_REQUIRED"
+          result.status === "AUTHENTICATED_APPROVAL_REQUIRED" ||
+          (labMode === "simulator" && result.status === "HUMAN_ESCALATION_REQUIRED")
           ? "complete"
           : "blocked",
       );
@@ -305,7 +343,9 @@ function App() {
                   ? "Run Guided Demo"
                   : labMode === "custom"
                     ? "Run Custom Scenario"
-                    : "Test Manager Escalation (Mock)"}
+                    : labMode === "simulator"
+                      ? "Run Supplier Harness (Mock)"
+                      : "Test Manager Escalation (Mock)"}
             </button>
             <div className="kill-switch">
               <div>
@@ -329,18 +369,84 @@ function App() {
           <div className="lab-header">
             <div>
               <span className="section-kicker">Interactive Judge Lab</span>
-              <h2>{labMode === "manager" ? "Resolve a no-compliant-offer exception" : "Control the procurement outcome"}</h2>
+              <h2>{labMode === "manager"
+                ? "Resolve a no-compliant-offer exception"
+                : labMode === "simulator"
+                  ? "Test deterministic supplier conversations"
+                  : "Control the procurement outcome"}</h2>
               <p>Public sandbox · synthetic calls · no phone number or secret required</p>
             </div>
-            <div className="runtime-badge mock">MOCK RUNTIME</div>
+            <div className="runtime-badge mock">
+              {labMode === "simulator"
+                ? "SYNTHETIC HARNESS · MOCK"
+                : labMode === "manager"
+                  ? "HUMAN ESCALATION · MOCK"
+                  : "MOCK RUNTIME"}
+            </div>
           </div>
 
           <div className="lab-mode-switch" role="tablist" aria-label="Demo mode">
             <button className={labMode === "guided" ? "active" : ""} onClick={() => setLabMode("guided")}>Guided Demo</button>
             <button className={labMode === "custom" ? "active" : ""} onClick={() => setLabMode("custom")}>Custom Scenario</button>
+            <button className={labMode === "simulator" ? "active" : ""} onClick={() => setLabMode("simulator")}>Supplier Simulator · Mock</button>
             <button className={labMode === "manager" ? "active" : ""} onClick={() => setLabMode("manager")}>Manager Escalation · Mock</button>
             <button disabled title="Requires server-side authorization and configured CALL-E backend">Live Judge Mode · locked</button>
           </div>
+
+          {(labMode === "simulator" || labMode === "manager") && (
+            <div className="supplier-simulator-preview">
+              <div className="simulator-heading">
+                <div>
+                  <span className="section-kicker">Synthetic Supplier Simulator</span>
+                  <strong>A deterministic synthetic supplier test harness used to safely demonstrate real telephony integration.</strong>
+                </div>
+                <span className="simulator-safe-badge">No real supplier or order</span>
+              </div>
+              <div className="simulator-profile-grid">
+                {simulatorProfiles.map((profile) => (
+                  <div key={profile.id}>
+                    <span>{profile.locale}</span>
+                    <strong>{profile.id}</strong>
+                    <small>{profile.result}</small>
+                    <em>{profile.rejection}</em>
+                  </div>
+                ))}
+              </div>
+              <div className="runtime-legend" aria-label="Runtime classification">
+                <span className="synthetic">Synthetic Supplier Simulator</span>
+                <span className="mock">Mock Mode</span>
+                <span className="locked">Live CALL-E Call · not connected</span>
+                <span className="locked">Recorded CALL-E Evidence · mock preview</span>
+                {labMode === "manager" && <span className="human">Human Manager Escalation</span>}
+              </div>
+              <div className="exception-journey" aria-label="Exception workflow stages">
+                {exceptionJourney.map((stage, index) => {
+                  const completed = Boolean(demoResult && (
+                    index < 6 ||
+                    (labMode === "manager" && index === 6) ||
+                    (index === 7 && proofVerification?.valid)
+                  ));
+                  const active = Boolean(demoResult && (
+                    (labMode === "simulator" && index === 6) ||
+                    (labMode === "manager" && index === 7 && !proofVerification?.valid)
+                  ));
+                  return (
+                    <div className={completed ? "complete" : active ? "active" : ""} key={stage}>
+                      <span>{index + 1}</span>
+                      <strong>{stage}</strong>
+                    </div>
+                  );
+                })}
+              </div>
+              <details className="technical-details">
+                <summary>View technical details</summary>
+                <div>
+                  <code>CALL-E → Amazon Connect → Lex V2 → Lambda → synthetic supplier data</code>
+                  <p>One future Connect number routes by RFQ/profile. Lambda resolves dynamic state, preserves the StockGuard runId and returns intent-specific answers for quote, remainder, validity and commercial-terms follow-ups. The live path remains disabled.</p>
+                </div>
+              </details>
+            </div>
+          )}
 
           {labMode === "custom" && (
             <div className="scenario-controls">
@@ -373,11 +479,6 @@ function App() {
           )}
           {labMode === "manager" && (
             <div className="manager-preview">
-              <div className="manager-scenario-grid">
-                <div><span>NordWerk · DE</span><strong>6 / 8 units</strong><small>Insufficient quantity</small></div>
-                <div><span>Atlas · FR</span><strong>05 Sep</strong><small>After stockout</small></div>
-                <div><span>PolStock · PL</span><strong>Terms changed</strong><small>Human approval required</small></div>
-              </div>
               <div className="manager-controls">
                 <label>Conversation language
                   <select value={managerLocale} onChange={(event) => setManagerLocale(event.target.value as SupportedCallLocale)}>
@@ -481,7 +582,7 @@ function App() {
           <article className="panel workflow-card">
             <div className="panel-heading">
               <div>
-                <span className="section-kicker">Live orchestration</span>
+                <span className="section-kicker">State-machine orchestration</span>
                 <h2>Autonomous workflow</h2>
               </div>
               <span className="live-indicator"><i /> {demoStatus === "running" ? "Running" : demoStatus === "complete" ? "Complete" : demoStatus === "blocked" ? "Blocked" : "Ready"}</span>
@@ -516,11 +617,15 @@ function App() {
         <section className="panel offers-panel" id="suppliers">
           <div className="panel-heading">
             <div>
-              <span className="section-kicker">CALL-E results</span>
+              <span className="section-kicker">
+                {labMode === "simulator" || labMode === "manager"
+                  ? "Synthetic supplier result preview"
+                  : "CALL-E result preview"}
+              </span>
               <h2>Multilingual supplier comparison</h2>
-              <p>Offers are normalized to EUR and validated against original-language evidence.</p>
+              <p>Offers are normalized to EUR and validated against field-level evidence. This public run is not recorded live CALL-E evidence.</p>
             </div>
-            <button className="secondary-button"><PhoneCall size={16} /> View call evidence</button>
+            <button className="secondary-button"><PhoneCall size={16} /> View evidence details</button>
           </div>
 
           <div className="table-wrap">

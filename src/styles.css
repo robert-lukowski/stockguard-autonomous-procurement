@@ -110,6 +110,36 @@ p { color: var(--muted); margin: 5px 0 0; font-size: 13px; }
 .judge-mode-note svg { color: var(--green); flex: 0 0 auto; }
 .resilience-badges { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
 .resilience-badges span { color: #53655d; background: #edf4f0; border-radius: 20px; padding: 5px 8px; font-size: 8px; font-weight: 700; }
+.supplier-simulator-preview { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.simulator-heading { display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; }
+.simulator-heading strong { display: block; max-width: 760px; margin-top: 5px; font: 700 12px/1.45 Manrope, sans-serif; }
+.simulator-safe-badge { color: var(--green-dark); background: var(--green-soft); border: 1px solid #b7dfcf; border-radius: 20px; padding: 6px 9px; font-size: 8px; font-weight: 800; white-space: nowrap; }
+.simulator-profile-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; margin-top: 12px; }
+.simulator-profile-grid > div { border: 1px solid var(--line); border-radius: 9px; background: #fafcfb; padding: 10px 11px; }
+.simulator-profile-grid span, .simulator-profile-grid strong, .simulator-profile-grid small, .simulator-profile-grid em { display: block; }
+.simulator-profile-grid span { color: var(--muted); font-size: 8px; }
+.simulator-profile-grid strong { margin-top: 4px; font: 800 11px Manrope, sans-serif; }
+.simulator-profile-grid small { margin-top: 4px; color: #43554d; font-size: 9px; }
+.simulator-profile-grid em { margin-top: 5px; color: var(--red); font-size: 8px; font-style: normal; font-weight: 700; }
+.runtime-legend { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+.runtime-legend span { border-radius: 20px; padding: 5px 8px; font-size: 8px; font-weight: 800; }
+.runtime-legend .synthetic { color: #5c4b90; background: #f0ecfb; }
+.runtime-legend .mock { color: #53615b; background: #edf1ef; }
+.runtime-legend .locked { color: #8b6926; background: var(--amber-soft); }
+.runtime-legend .human { color: var(--green-dark); background: var(--green-soft); }
+.exception-journey { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; margin-top: 11px; }
+.exception-journey > div { display: flex; align-items: center; gap: 7px; min-height: 36px; padding: 7px 8px; border: 1px solid var(--line); border-radius: 8px; color: #8a9690; background: #fafbfa; }
+.exception-journey span { width: 20px; height: 20px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 50%; background: #edf1ef; font-size: 8px; font-weight: 800; }
+.exception-journey strong { font-size: 8px; line-height: 1.25; }
+.exception-journey > div.complete { color: var(--green-dark); border-color: #b7dfcf; background: var(--green-soft); }
+.exception-journey > div.complete span { color: #fff; background: var(--green); }
+.exception-journey > div.active { color: #875b10; border-color: #ebce95; background: var(--amber-soft); }
+.exception-journey > div.active span { color: #fff; background: var(--amber); }
+.technical-details { margin-top: 10px; border: 1px solid var(--line); border-radius: 9px; background: #f8faf9; }
+.technical-details summary { cursor: pointer; padding: 9px 11px; color: #4b5c54; font-size: 9px; font-weight: 800; }
+.technical-details > div { padding: 0 11px 10px; }
+.technical-details code { color: var(--green-dark); font-size: 9px; }
+.technical-details p { font-size: 9px; line-height: 1.45; }
 .manager-preview { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
 .manager-scenario-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
 .manager-scenario-grid > div { border: 1px solid var(--line); border-radius: 9px; background: #fafcfb; padding: 10px 11px; }
@@ -284,6 +314,7 @@ footer { display: flex; justify-content: space-between; color: #819089; font-siz
   .metrics, .content-grid, .lower-grid { grid-template-columns: 1fr; }
   .scenario-controls { grid-template-columns: 1fr 1fr; }
   .manager-scenario-grid, .manager-controls { grid-template-columns: 1fr; }
+  .simulator-profile-grid, .exception-journey { grid-template-columns: 1fr; }
   .manager-result { grid-template-columns: 1fr; }
   .manager-result > svg { transform: rotate(90deg); }
   .stock-equation { grid-template-columns: repeat(3, 1fr); }
