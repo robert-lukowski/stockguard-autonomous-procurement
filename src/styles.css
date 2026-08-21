@@ -93,7 +93,7 @@ p { color: var(--muted); margin: 5px 0 0; font-size: 13px; }
 .lab-header { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; }
 .runtime-badge { border-radius: 30px; padding: 6px 10px; font-size: 9px; font-weight: 800; letter-spacing: .06em; }
 .runtime-badge.mock { color: #53615b; background: #edf1ef; border: 1px solid #d7dfda; }
-.lab-mode-switch { display: flex; gap: 7px; margin-top: 15px; }
+.lab-mode-switch { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 15px; }
 .lab-mode-switch button {
   border: 1px solid var(--line); background: #fff; color: #586760; border-radius: 8px;
   padding: 8px 11px; font-size: 10px; font-weight: 700; cursor: pointer;
@@ -110,6 +110,26 @@ p { color: var(--muted); margin: 5px 0 0; font-size: 13px; }
 .judge-mode-note svg { color: var(--green); flex: 0 0 auto; }
 .resilience-badges { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
 .resilience-badges span { color: #53655d; background: #edf4f0; border-radius: 20px; padding: 5px 8px; font-size: 8px; font-weight: 700; }
+.manager-preview { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.manager-scenario-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+.manager-scenario-grid > div { border: 1px solid var(--line); border-radius: 9px; background: #fafcfb; padding: 10px 11px; }
+.manager-scenario-grid span, .manager-scenario-grid strong, .manager-scenario-grid small { display: block; }
+.manager-scenario-grid span { color: var(--muted); font-size: 9px; }
+.manager-scenario-grid strong { margin-top: 4px; font: 700 12px Manrope, sans-serif; }
+.manager-scenario-grid small { margin-top: 3px; color: var(--red); font-size: 8px; }
+.manager-controls { display: grid; grid-template-columns: 1fr 2fr; gap: 10px; margin-top: 11px; }
+.manager-controls label { color: var(--muted); font-size: 9px; font-weight: 700; }
+.manager-controls select {
+  display: block; width: 100%; margin-top: 5px; border: 1px solid var(--line); border-radius: 8px;
+  background: #fbfcfb; color: var(--ink); padding: 8px 9px; font: 600 10px "DM Sans", sans-serif;
+}
+.manager-guardrail { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding: 9px 11px; border-radius: 9px; color: #805716; background: var(--amber-soft); font-size: 9px; }
+.manager-guardrail svg { flex: 0 0 auto; color: var(--amber); }
+.manager-result { display: grid; grid-template-columns: 1fr auto 1fr auto; gap: 11px; align-items: center; margin-top: 11px; padding: 11px; border: 1px solid #a8d9c5; background: var(--green-soft); border-radius: 10px; }
+.manager-result span, .manager-result strong { display: block; }
+.manager-result span { color: var(--muted); font-size: 8px; }
+.manager-result strong { margin-top: 3px; color: var(--green-dark); font-size: 10px; }
+.evidence-chip { display: flex; align-items: center; gap: 5px; color: var(--green); font-size: 9px; font-weight: 800; white-space: nowrap; }
 .metrics article {
   display: flex; align-items: center; gap: 12px; padding: 16px;
   background: var(--panel); border: 1px solid var(--line); border-radius: 13px;
@@ -195,6 +215,8 @@ td { padding: 11px 10px; border-bottom: 1px solid #edf1ef; white-space: nowrap; 
 .status-pill.selected { color: var(--green); background: var(--green-soft); }
 .status-pill.too-late { color: var(--amber); background: var(--amber-soft); }
 .status-pill.insufficient { color: var(--red); background: var(--red-soft); }
+.status-pill.terms-changed, .status-pill.over-budget { color: var(--amber); background: var(--amber-soft); }
+.status-pill.rejected { color: #66736d; background: #edf1ef; }
 
 .lower-grid { grid-template-columns: 1.45fr 1fr; }
 .validation-score { display: flex; align-items: center; gap: 6px; color: var(--green); background: var(--green-soft); border-radius: 8px; padding: 8px 10px; font-size: 11px; font-weight: 800; }
@@ -261,6 +283,9 @@ footer { display: flex; justify-content: space-between; color: #819089; font-siz
   .topbar-actions { margin-top: 14px; }
   .metrics, .content-grid, .lower-grid { grid-template-columns: 1fr; }
   .scenario-controls { grid-template-columns: 1fr 1fr; }
+  .manager-scenario-grid, .manager-controls { grid-template-columns: 1fr; }
+  .manager-result { grid-template-columns: 1fr; }
+  .manager-result > svg { transform: rotate(90deg); }
   .stock-equation { grid-template-columns: repeat(3, 1fr); }
   .operator { display: none; }
   .checks-grid { grid-template-columns: repeat(2, 1fr); }
