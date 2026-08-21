@@ -8,7 +8,9 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "validate:aws-bootstrap": "node scripts/validate-aws-readonly-bootstrap.mjs",
+    "test:aws-inventory": "node scripts/test-aws-readonly-inventory.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.3.4",

@@ -28,7 +28,9 @@ The React 19 product dashboard currently provides:
   fail-closed Lex V2 handler contract for a future Amazon Connect test harness;
 - explicit RFQ/profile/routing metadata in the CALL-E supplier-call contract;
 - an undeployed DynamoDB supplier-data adapter with short RFQ expiry,
-  transactional routing-key creation and optimistic profile versioning.
+  transactional routing-key creation and optimistic profile versioning;
+- a manual, OIDC-authenticated AWS read-only inventory workflow and a
+  repository-specific IAM role template for the existing Connect sandbox.
 
 The manager escalation preview demonstrates:
 
@@ -68,6 +70,8 @@ The no-compliant-offer demo now sources its three repeatable synthetic supplier 
 See [Judge Mode — Manager Escalation](docs/judge-mode-manager-escalation.md) for the state model, API contract, proposed AWS deployment, guardrails, failure behavior and implementation roadmap.
 
 See [Synthetic Supplier Simulator](docs/synthetic-supplier-simulator.md) for the one-number multilingual routing design, deterministic profiles, Lex intents, runtime labels and live-deployment safeguards.
+
+See [AWS read-only bootstrap](docs/aws-readonly-bootstrap.md) for the isolated OIDC role, one-time manual setup and sanitized Connect inventory. The workflow cannot deploy resources or inspect phone numbers.
 
 ## Decision Proof wording
 

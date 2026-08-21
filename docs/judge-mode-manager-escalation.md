@@ -162,9 +162,10 @@ The record is a **cryptographically signed, machine-verifiable decision record w
 3. **Complete:** local backend core for PBKDF2 verification, opaque sessions, one-call claims, rate limiting, global budget and fail-closed webhooks.
 4. **Complete as undeployed contracts:** API Gateway/Lambda handlers, DynamoDB conditional-write adapters and the Secrets Manager access-code adapter.
 5. **Complete as undeployed contracts:** deterministic supplier profiles, replaceable synthetic data store, localized follow-up service and fail-closed Lex V2 handler.
-6. **Next:** add the AWS SDK composition root and infrastructure definition for Judge Mode and the Supplier Simulator, but do not deploy until explicitly authorized.
-7. **Next:** connect CALL-E credentials server-side and verify the exact webhook authenticity mechanism from official documentation.
-8. **Next:** run consented calls only to verified test participants and validate supported countries, latency, voicemail and transcript behavior.
-9. **Final:** enable the Devpost-only code, global call budget, kill switch, deletion control and KMS signer.
+6. **Complete as an undeployed bootstrap:** a dedicated immutable-subject GitHub OIDC role template and manual read-only Connect inventory workflow.
+7. **Next:** run the read-only inventory after manual IAM/GitHub variable setup, then tailor the AWS SDK composition root and infrastructure definition to the existing sandbox without deploying application resources.
+8. **Next:** connect CALL-E credentials server-side and verify the exact webhook authenticity mechanism from official documentation.
+9. **Next:** run consented calls only to verified test participants and validate supported countries, latency, voicemail and transcript behavior.
+10. **Final:** enable the Devpost-only code, global call budget, kill switch, deletion control and KMS signer.
 
 No live call or paid AWS resource is created by the current implementation.
