@@ -416,15 +416,19 @@ export class ProcurementWorkflow {
       !decision.selectedOffer ||
       !decision.validation
     ) {
-      stateMachine.transition("HUMAN_REVIEW", "No offer qualified for autonomous execution");
+      stateMachine.transition("NO_COMPLIANT_OFFER", "Every supplier offer failed at least one deterministic policy rule");
+      record("NO_COMPLIANT_OFFER", "No supplier offer passed every machine-enforced policy check", {
+        rejectedOffers: decision.rejectedOffers.length,
+      });
+      stateMachine.transition("HUMAN_ESCALATION_REQUIRED", "A bounded manager escalation is required");
       record(
         "HUMAN_EXCEPTION_REQUIRED",
-        "No offer qualified for autonomous execution",
+        "No offer qualified; no policy override or purchase order was created",
       );
 
       return finish({
         workflowId: input.workflowId,
-        status: "HUMAN_EXCEPTION_REQUIRED",
+        status: "HUMAN_ESCALATION_REQUIRED",
         decision,
         purchaseOrder: null,
         proof: null,
@@ -521,6 +525,7 @@ export class ProcurementWorkflow {
       ),
       orderValueEur: purchaseOrder.totalPriceEur,
       explanation: decision.reason,
+      managerEscalation: null,
       ruleTrace: [
         {
           supplierId: decision.selectedOffer.supplierId,
