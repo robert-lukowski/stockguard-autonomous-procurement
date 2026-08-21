@@ -378,6 +378,17 @@ export class ProcurementWorkflow {
           evidenceItems: task.evidence.length,
           outcome: task.outcome,
           attemptCount,
+          counterpartyMode: supplier.syntheticRouting
+            ? "SYNTHETIC_SUPPLIER_SIMULATOR"
+            : "APPROVED_SUPPLIER",
+          ...(supplier.syntheticRouting
+            ? {
+                rfqId: supplier.syntheticRouting.rfqId,
+                supplierProfileId:
+                  supplier.syntheticRouting.supplierProfileId,
+                datasetVersion: supplier.syntheticRouting.datasetVersion,
+              }
+            : {}),
         },
       );
       if (task.outcome === "TIMEOUT") {

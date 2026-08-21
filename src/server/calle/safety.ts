@@ -10,7 +10,12 @@ export class CallSafetyError extends Error {
       | "SUPPLIER_NOT_ALLOWED"
       | "NUMBER_NOT_ALLOWED"
       | "CONSENT_MISSING"
-      | "CALL_LIMIT_INVALID",
+      | "CALL_LIMIT_INVALID"
+      | "SYNTHETIC_SIMULATOR_DISABLED"
+      | "SYNTHETIC_SIMULATOR_NUMBER_MISMATCH"
+      | "SYNTHETIC_PROFILE_NOT_ALLOWED"
+      | "SYNTHETIC_ROUTING_INVALID"
+      | "SYNTHETIC_ROUTING_REQUIRED",
   ) {
     super(message);
     this.name = "CallSafetyError";

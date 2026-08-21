@@ -31,10 +31,13 @@ export type SyntheticSupplierProfile = {
 export type SyntheticRfq = {
   runId: string;
   rfqId: string;
+  routingCode: string;
   profileId: SupplierProfileId;
+  datasetVersion: string;
   sku: string;
   requestedQuantity: number;
   requiredBy: string;
+  expiresAt: string;
 };
 
 export type SyntheticSupplierQuote = {
@@ -64,6 +67,17 @@ export type SyntheticSupplierQuote = {
 export interface SyntheticSupplierStore {
   getProfile(profileId: SupplierProfileId): Promise<SyntheticSupplierProfile | null>;
   resolveRfq(rfqId: string): Promise<SyntheticRfq | null>;
+  resolveRoutingCode(routingCode: string): Promise<SyntheticRfq | null>;
+}
+
+export type SyntheticProfileUpdate = {
+  profile: SyntheticSupplierProfile;
+  expectedDatasetVersion: string;
+};
+
+export interface SyntheticSupplierAdminPort {
+  createRfq(rfq: SyntheticRfq): Promise<"CREATED" | "DUPLICATE">;
+  updateProfile(update: SyntheticProfileUpdate): Promise<"UPDATED" | "VERSION_CONFLICT">;
 }
 
 export type SupplierSimulatorIntent =

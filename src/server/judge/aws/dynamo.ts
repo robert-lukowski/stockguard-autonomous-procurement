@@ -8,41 +8,17 @@ import type {
   StoredCallClaim,
   StoredJudgeSession,
 } from "../backend";
+import {
+  DynamoConditionalCheckFailed,
+  type DynamoDocumentPort,
+} from "../../aws/dynamoDocument";
 
-export type DynamoCommand =
-  | {
-      operation: "Get";
-      tableName: string;
-      key: Record<string, unknown>;
-      consistentRead: boolean;
-    }
-  | {
-      operation: "Put";
-      tableName: string;
-      item: Record<string, unknown>;
-      conditionExpression?: string;
-      expressionAttributeNames?: Record<string, string>;
-      expressionAttributeValues?: Record<string, unknown>;
-    }
-  | {
-      operation: "Update";
-      tableName: string;
-      key: Record<string, unknown>;
-      updateExpression: string;
-      conditionExpression?: string;
-      expressionAttributeNames: Record<string, string>;
-      expressionAttributeValues: Record<string, unknown>;
-    };
-
-export type DynamoCommandResult = {
-  item?: Record<string, unknown>;
-};
-
-export interface DynamoDocumentPort {
-  execute(command: DynamoCommand): Promise<DynamoCommandResult>;
-}
-
-export class DynamoConditionalCheckFailed extends Error {}
+export {
+  DynamoConditionalCheckFailed,
+  type DynamoCommand,
+  type DynamoCommandResult,
+  type DynamoDocumentPort,
+} from "../../aws/dynamoDocument";
 
 function sessionKey(sessionId: string): Record<string, string> {
   return { PK: `SESSION#${sessionId}`, SK: "METADATA" };

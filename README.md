@@ -25,7 +25,10 @@ The React 19 product dashboard currently provides:
 - API Gateway/Lambda handler contracts plus DynamoDB conditional-write and
   Secrets Manager adapters, all still undeployed;
 - a deterministic, multilingual Supplier Simulator domain service and
-  fail-closed Lex V2 handler contract for a future Amazon Connect test harness.
+  fail-closed Lex V2 handler contract for a future Amazon Connect test harness;
+- explicit RFQ/profile/routing metadata in the CALL-E supplier-call contract;
+- an undeployed DynamoDB supplier-data adapter with short RFQ expiry,
+  transactional routing-key creation and optimistic profile versioning.
 
 The manager escalation preview demonstrates:
 
@@ -58,7 +61,7 @@ The intended live flow uses a backend-verified Devpost code, a short-lived one-c
 
 The local backend core implements these semantics through mockable ports. It uses PBKDF2-SHA256 for the access-code verifier, stores only opaque-token and phone hashes, atomically consumes one call per session, deduplicates webhook IDs and rejects every webhook while provider authenticity verification is unconfigured.
 
-The repository now also contains framework-neutral API Gateway/Lambda handler contracts, DynamoDB command adapters for conditional session claims, rate limits, the global call budget and webhook deduplication, plus a Secrets Manager access-code adapter. They are tested as code only: no AWS SDK composition root, stack or resource has been deployed, and the live CALL-E path remains disabled. KMS signing still requires a live backend adapter.
+The repository now also contains framework-neutral API Gateway/Lambda handler contracts, DynamoDB command adapters for conditional session claims, rate limits, the global call budget and webhook deduplication, plus a Secrets Manager access-code adapter. Supplier-side contracts include an allowlisted Connect test-number boundary, a six-digit short-lived routing code, RFQ/profile/dataset correlation and version-pinned synthetic data. They are tested as code only: no AWS SDK composition root, stack or resource has been deployed, and the live CALL-E path remains disabled. KMS signing still requires a live backend adapter.
 
 The no-compliant-offer demo now sources its three repeatable synthetic supplier profiles from a dedicated data service. A future Amazon Connect/Lex/Lambda deployment can expose the same profiles as a conversational test counterparty, including a follow-up about missing quantity. This is a test harness, not the claimed business value: production CALL-E calls would target supplier humans, sales desks, IVRs or existing telephony systems when no current API/EDI integration exists.
 

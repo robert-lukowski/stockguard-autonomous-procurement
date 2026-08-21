@@ -12,32 +12,47 @@ const rfqs: SyntheticRfq[] = [
   {
     runId: "run-081",
     rfqId: "RFQ-DE-081",
+    routingCode: "281001",
     profileId: "DE_SUPPLIER",
+    datasetVersion: "synthetic-suppliers-2026-08-v1",
     sku: "CF-220",
     requestedQuantity: 1_000,
     requiredBy: "2026-08-28T12:00:00+02:00",
+    expiresAt: "2026-08-21T10:00:00Z",
   },
   {
     runId: "run-081",
     rfqId: "RFQ-FR-081",
+    routingCode: "281002",
     profileId: "FR_SUPPLIER",
+    datasetVersion: "synthetic-suppliers-2026-08-v1",
     sku: "CF-220",
     requestedQuantity: 1_000,
     requiredBy: "2026-08-28T12:00:00+02:00",
+    expiresAt: "2026-08-21T10:00:00Z",
   },
   {
     runId: "run-081",
     rfqId: "RFQ-PL-081",
+    routingCode: "281003",
     profileId: "PL_SUPPLIER",
+    datasetVersion: "synthetic-suppliers-2026-08-v1",
     sku: "CF-220",
     requestedQuantity: 1_000,
     requiredBy: "2026-08-28T12:00:00+02:00",
+    expiresAt: "2026-08-21T10:00:00Z",
   },
 ];
 
 function serviceFixture() {
   const store = new InMemorySyntheticSupplierStore(undefined, rfqs);
-  return { store, service: new SupplierSimulatorService(store) };
+  return {
+    store,
+    service: new SupplierSimulatorService(
+      store,
+      () => new Date("2026-08-21T09:00:00Z"),
+    ),
+  };
 }
 
 function event(overrides: Partial<LexV2Event> = {}): LexV2Event {
@@ -101,6 +116,7 @@ describe("SupplierSimulatorService", () => {
       state: "OUT_OF_STOCK",
       datasetVersion: "test-override-v1",
     });
+    store.setRfq({ ...rfqs[0], datasetVersion: "test-override-v1" });
 
     const result = await service.respond({
       intent: "GetSupplierQuote",
@@ -112,6 +128,30 @@ describe("SupplierSimulatorService", () => {
       state: "OUT_OF_STOCK",
       datasetVersion: "test-override-v1",
     });
+  });
+
+  it("rejects an RFQ pinned to a stale supplier dataset", async () => {
+    const { store, service } = serviceFixture();
+    store.setProfile({
+      ...syntheticSupplierProfiles.DE_SUPPLIER,
+      datasetVersion: "synthetic-suppliers-2026-08-v2",
+    });
+
+    await expect(
+      service.resolveContext("RFQ-DE-081"),
+    ).rejects.toThrow("dataset version does not match");
+  });
+
+  it("fails closed after the short-lived synthetic RFQ expires", async () => {
+    const store = new InMemorySyntheticSupplierStore(undefined, rfqs);
+    const service = new SupplierSimulatorService(
+      store,
+      () => new Date("2026-08-21T10:00:00Z"),
+    );
+
+    await expect(
+      service.resolveRoutingContext("281001"),
+    ).rejects.toThrow("Synthetic RFQ has expired");
   });
 });
 
@@ -137,7 +177,7 @@ describe("Lex V2 fail-closed handler", () => {
         intent: {
           name: "IdentifySyntheticRfq",
           slots: {
-            RfqId: { value: { interpretedValue: "RFQ-DE-081" } },
+            RoutingCode: { value: { interpretedValue: "281001" } },
           },
         },
       },
@@ -148,6 +188,7 @@ describe("Lex V2 fail-closed handler", () => {
       intent: { state: "Fulfilled" },
       sessionAttributes: {
         runId: "run-081",
+        routingCode: "281001",
         supplierProfileId: "DE_SUPPLIER",
         targetLocale: "de_DE",
       },

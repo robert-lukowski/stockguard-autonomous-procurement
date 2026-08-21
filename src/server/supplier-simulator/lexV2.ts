@@ -102,11 +102,12 @@ export function createSupplierSimulatorLexHandler(
     }
     const attributes = event.sessionState.sessionAttributes ?? {};
     const rfqId = attributes.rfqId ?? slot(event, "RfqId");
+    const routingCode = attributes.routingCode ?? slot(event, "RoutingCode");
     const rawProfileId = attributes.supplierProfileId ?? slot(event, "SupplierProfile");
     const profileId = rawProfileId && profileIds.has(rawProfileId as SupplierProfileId)
       ? rawProfileId as SupplierProfileId
       : undefined;
-    if (!rfqId || (rawProfileId && !profileId)) {
+    if (rawProfileId && !profileId) {
       return failed(event, "RFQ_CONTEXT_INVALID");
     }
 
@@ -114,14 +115,16 @@ export function createSupplierSimulatorLexHandler(
       if (event.bot.localeId !== "en_GB") {
         return failed(event, "ROUTER_LOCALE_MISMATCH");
       }
+      if (!routingCode) return failed(event, "ROUTING_CODE_MISSING");
       try {
-        const context = await service.resolveContext(rfqId, profileId);
+        const context = await service.resolveRoutingContext(routingCode, profileId);
         return {
           sessionState: {
             sessionAttributes: {
               ...attributes,
               runId: context.rfq.runId,
               rfqId: context.rfq.rfqId,
+              routingCode: context.rfq.routingCode,
               supplierProfileId: context.profile.profileId,
               supplierId: context.profile.supplierId,
               targetLocale: context.profile.locale,
@@ -140,6 +143,7 @@ export function createSupplierSimulatorLexHandler(
         return failed(event, "SYNTHETIC_DATA_UNAVAILABLE");
       }
     }
+    if (!rfqId) return failed(event, "RFQ_CONTEXT_INVALID");
     const intent = event.sessionState.intent.name as SupplierSimulatorIntent;
     if (!intents.has(intent)) return failed(event, "INTENT_NOT_ALLOWED");
 

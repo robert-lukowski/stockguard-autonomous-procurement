@@ -1,6 +1,8 @@
 import type {
   SupplierProfileId,
+  SyntheticProfileUpdate,
   SyntheticRfq,
+  SyntheticSupplierAdminPort,
   SyntheticSupplierProfile,
   SyntheticSupplierStore,
 } from "./types";
@@ -41,9 +43,12 @@ export const syntheticSupplierProfiles: Record<
   },
 };
 
-export class InMemorySyntheticSupplierStore implements SyntheticSupplierStore {
+export class InMemorySyntheticSupplierStore
+  implements SyntheticSupplierStore, SyntheticSupplierAdminPort
+{
   private readonly profiles = new Map<SupplierProfileId, SyntheticSupplierProfile>();
   private readonly rfqs = new Map<string, SyntheticRfq>();
+  private readonly rfqIdsByRoutingCode = new Map<string, string>();
 
   constructor(
     profiles: SyntheticSupplierProfile[] = Object.values(syntheticSupplierProfiles),
@@ -52,7 +57,7 @@ export class InMemorySyntheticSupplierStore implements SyntheticSupplierStore {
     for (const profile of profiles) {
       this.profiles.set(profile.profileId, structuredClone(profile));
     }
-    for (const rfq of rfqs) this.rfqs.set(rfq.rfqId, structuredClone(rfq));
+    for (const rfq of rfqs) this.setRfq(rfq);
   }
 
   async getProfile(
@@ -67,11 +72,41 @@ export class InMemorySyntheticSupplierStore implements SyntheticSupplierStore {
     return rfq ? structuredClone(rfq) : null;
   }
 
+  async resolveRoutingCode(routingCode: string): Promise<SyntheticRfq | null> {
+    const rfqId = this.rfqIdsByRoutingCode.get(routingCode);
+    return rfqId ? this.resolveRfq(rfqId) : null;
+  }
+
   setProfile(profile: SyntheticSupplierProfile): void {
     this.profiles.set(profile.profileId, structuredClone(profile));
   }
 
   setRfq(rfq: SyntheticRfq): void {
+    const previous = this.rfqs.get(rfq.rfqId);
+    if (previous) this.rfqIdsByRoutingCode.delete(previous.routingCode);
     this.rfqs.set(rfq.rfqId, structuredClone(rfq));
+    this.rfqIdsByRoutingCode.set(rfq.routingCode, rfq.rfqId);
+  }
+
+  async createRfq(rfq: SyntheticRfq): Promise<"CREATED" | "DUPLICATE"> {
+    if (
+      this.rfqs.has(rfq.rfqId) ||
+      this.rfqIdsByRoutingCode.has(rfq.routingCode)
+    ) {
+      return "DUPLICATE";
+    }
+    this.setRfq(rfq);
+    return "CREATED";
+  }
+
+  async updateProfile(
+    update: SyntheticProfileUpdate,
+  ): Promise<"UPDATED" | "VERSION_CONFLICT"> {
+    const current = this.profiles.get(update.profile.profileId);
+    if (!current || current.datasetVersion !== update.expectedDatasetVersion) {
+      return "VERSION_CONFLICT";
+    }
+    this.setProfile(update.profile);
+    return "UPDATED";
   }
 }

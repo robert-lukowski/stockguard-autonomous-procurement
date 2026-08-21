@@ -16,6 +16,7 @@ export type {
   SupplierCallStructuredResult,
   SupplierCallTask,
   StructuredResultValidation,
+  SyntheticSupplierRouting,
   SupportedCallLocale,
   SupportedCallRegion,
 } from "./types";

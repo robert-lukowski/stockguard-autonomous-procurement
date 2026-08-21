@@ -130,23 +130,31 @@ function localizedMessage(
 }
 
 export class SupplierSimulatorService {
-  constructor(private readonly store: SyntheticSupplierStore) {}
+  constructor(
+    private readonly store: SyntheticSupplierStore,
+    private readonly clock: () => Date = () => new Date(),
+  ) {}
 
-  async resolveContext(
-    rfqId: string,
+  private async validateContext(
+    rfq: SyntheticRfq | null,
     requestedProfileId?: SyntheticRfq["profileId"],
   ): Promise<{ rfq: SyntheticRfq; profile: SyntheticSupplierProfile }> {
-    const rfq = await this.store.resolveRfq(rfqId);
     if (!rfq) throw new Error("Unknown synthetic RFQ");
     if (
       rfq.runId.length === 0 ||
-      rfq.rfqId !== rfqId ||
+      rfq.rfqId.length === 0 ||
+      !/^\d{6}$/.test(rfq.routingCode) ||
+      rfq.datasetVersion.length === 0 ||
       rfq.sku.length === 0 ||
       !Number.isInteger(rfq.requestedQuantity) ||
       rfq.requestedQuantity <= 0 ||
-      !Number.isFinite(Date.parse(rfq.requiredBy))
+      !Number.isFinite(Date.parse(rfq.requiredBy)) ||
+      !Number.isFinite(Date.parse(rfq.expiresAt))
     ) {
       throw new Error("Synthetic RFQ is invalid");
+    }
+    if (Date.parse(rfq.expiresAt) <= this.clock().getTime()) {
+      throw new Error("Synthetic RFQ has expired");
     }
     if (requestedProfileId && requestedProfileId !== rfq.profileId) {
       throw new Error("Synthetic RFQ does not belong to the requested supplier profile");
@@ -156,7 +164,33 @@ export class SupplierSimulatorService {
     if (!Number.isFinite(profile.baseUnitPrice) || profile.baseUnitPrice < 0) {
       throw new Error("Synthetic supplier profile is invalid");
     }
+    if (profile.datasetVersion !== rfq.datasetVersion) {
+      throw new Error("Synthetic RFQ dataset version does not match the supplier profile");
+    }
     return { rfq, profile };
+  }
+
+  async resolveContext(
+    rfqId: string,
+    requestedProfileId?: SyntheticRfq["profileId"],
+  ): Promise<{ rfq: SyntheticRfq; profile: SyntheticSupplierProfile }> {
+    const rfq = await this.store.resolveRfq(rfqId);
+    if (rfq?.rfqId !== rfqId) throw new Error("Synthetic RFQ lookup mismatch");
+    return this.validateContext(rfq, requestedProfileId);
+  }
+
+  async resolveRoutingContext(
+    routingCode: string,
+    requestedProfileId?: SyntheticRfq["profileId"],
+  ): Promise<{ rfq: SyntheticRfq; profile: SyntheticSupplierProfile }> {
+    if (!/^\d{6}$/.test(routingCode)) {
+      throw new Error("Synthetic routing code is invalid");
+    }
+    const rfq = await this.store.resolveRoutingCode(routingCode);
+    if (rfq?.routingCode !== routingCode) {
+      throw new Error("Synthetic routing lookup mismatch");
+    }
+    return this.validateContext(rfq, requestedProfileId);
   }
 
   async respond(request: SupplierSimulatorRequest): Promise<SupplierSimulatorResponse> {
