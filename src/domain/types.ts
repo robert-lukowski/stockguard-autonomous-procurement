@@ -30,8 +30,31 @@ export type SupplierOffer = {
   unitPrice: number;
   currency: Currency;
   deliveryAt: string;
+  offerValidUntil: string | null;
   commercialTermsChanged: boolean;
   evidenceComplete: boolean;
+  evidenceStatus: Record<
+    | "skuConfirmed"
+    | "availableQuantity"
+    | "unitPrice"
+    | "currency"
+    | "deliveryAt"
+    | "offerValidUntil"
+    | "commercialTermsChanged",
+    "VERIFIED" | "UNVERIFIED" | "NOT_PROVIDED"
+  >;
+  evidenceByField: Partial<
+    Record<
+      | "skuConfirmed"
+      | "availableQuantity"
+      | "unitPrice"
+      | "currency"
+      | "deliveryAt"
+      | "offerValidUntil"
+      | "commercialTermsChanged",
+      { source: string; excerpt: string; verified: boolean }
+    >
+  >;
   completionConfidence: number;
   attemptCount: number;
 };
@@ -54,15 +77,18 @@ export type NormalizedOffer = SupplierOffer & {
 
 export type PolicyCheck = {
   id: string;
+  status: "PASS" | "FAIL" | "REQUIRES_HUMAN";
   passed: boolean;
   evidence: string;
+  inputs: Record<string, string | number | boolean | null>;
 };
 
 export type ValidationResult = {
-  decision: "PASS" | "BLOCK";
+  decision: "PASS" | "BLOCK" | "REQUIRES_HUMAN";
   checks: PolicyCheck[];
   policyVersion: string;
   failedCheckIds: string[];
+  humanReviewCheckIds: string[];
 };
 
 export type ProcurementDecision = {
