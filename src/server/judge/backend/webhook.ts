@@ -12,6 +12,7 @@ import {
   validateManagerEscalationResult,
   type ManagerEscalationTask,
 } from "../../escalation";
+import type { ManagerResultReader } from "./types";
 
 export interface WebhookAuthenticityVerifier {
   verify(rawBody: string, headers: Record<string, string>): Promise<boolean>;
@@ -97,11 +98,26 @@ export interface ManagerResultSink {
   record(runId: string, task: ManagerEscalationTask): Promise<void>;
 }
 
-export class InMemoryManagerResultSink implements ManagerResultSink {
+export class InMemoryManagerResultSink
+  implements ManagerResultSink, ManagerResultReader
+{
   readonly results: Array<{ runId: string; task: ManagerEscalationTask }> = [];
 
   async record(runId: string, task: ManagerEscalationTask): Promise<void> {
     this.results.push({ runId, task: structuredClone(task) });
+  }
+
+  /**
+   * First recorded result wins.
+   *
+   * `JudgeWebhookService` already rejects a replayed event id before it
+   * reaches the sink, so a duplicate webhook never records twice. Should two
+   * distinct events ever land for one run, the terminal result a judge has
+   * already been shown must not be rewritten underneath them.
+   */
+  async read(runId: string): Promise<ManagerEscalationTask | null> {
+    const entry = this.results.find((item) => item.runId === runId);
+    return entry ? structuredClone(entry.task) : null;
   }
 }
 

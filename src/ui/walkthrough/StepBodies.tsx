@@ -14,6 +14,7 @@ import type { WorkflowInput, WorkflowResult } from "../../server/workflow";
 import type { MockManagerResponse } from "../../server/escalation";
 import type { ProofVerification } from "../../security";
 import { CodeBlock, Disclosure } from "../Disclosure";
+import { LiveJudgeModePanel } from "./LiveJudgeModePanel";
 import { decisionTone } from "../runtimeClassification";
 
 export type WalkthroughData = {
@@ -642,6 +643,18 @@ export function EscalationStep({
           )}
         </div>
       )}
+
+      {/*
+        Live Judge Mode is a separate, controlled option. The mock path above
+        is unchanged and remains the primary public demo.
+      */}
+      <div className="border-t border-ground-700/40 pt-4">
+        <p className="mb-3 text-xs text-ground-500">
+          Everything above runs in mock. If you have a judge access code, you
+          can instead take this call yourself:
+        </p>
+        <LiveJudgeModePanel />
+      </div>
 
       <Disclosure
         label="How the guardrail works"

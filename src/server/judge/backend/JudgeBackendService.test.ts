@@ -11,8 +11,10 @@ import {
   JudgeBackendError,
   JudgeBackendService,
   StaticAccessCodeSecretStore,
+  InMemoryManagerResultSink,
   StaticKillSwitch,
   type EscalationContextPort,
+  type JudgeRunPreparationPort,
 } from ".";
 
 const code = "test-only-judge-code";
@@ -61,12 +63,23 @@ function completedTask(runId: string): ManagerEscalationTask {
   };
 }
 
+/** Deterministic stand-in for the server-owned run preparer. */
+const runPreparation: JudgeRunPreparationPort = {
+  async prepareRun() {
+    return {
+      runId: "run-no-offer",
+      context: (await context.getEscalationContext("run-no-offer"))!,
+    };
+  },
+};
+
 async function serviceFixture(options: { killSwitch?: boolean; callBudget?: number } = {}) {
   const secret = await createTestAccessCodeSecret(
     code,
     new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]),
   );
   const sessions = new InMemoryJudgeSessionStore();
+  const results = new InMemoryManagerResultSink();
   const budget = new InMemoryGlobalCallBudget(options.callBudget ?? 10);
   let calls = 0;
   const managerCalls: ManagerEscalationPort = {
@@ -85,6 +98,8 @@ async function serviceFixture(options: { killSwitch?: boolean; callBudget?: numb
       killSwitch: new StaticKillSwitch(options.killSwitch ?? false),
       escalationContext: context,
       managerCalls,
+      runPreparation,
+      managerResults: results,
     },
     () => current,
   );
@@ -92,6 +107,7 @@ async function serviceFixture(options: { killSwitch?: boolean; callBudget?: numb
     service,
     sessions,
     budget,
+    results,
     calls: () => calls,
     advance(minutes: number) {
       current = new Date(current.getTime() + minutes * 60 * 1000);

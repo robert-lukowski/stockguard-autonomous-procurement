@@ -44,6 +44,14 @@ describe("API Gateway Judge handlers", () => {
       expiresAt: "2026-08-21T10:15:00Z",
       remainingCalls: 1,
       mode: "MOCK",
+      runId: "judge-run-1",
+      scenario: {
+        organizationName: "Northstar Manufacturing",
+        sku: "CF-220",
+        requiredQuantity: 8,
+        stockoutAt: "2026-08-28T12:00:00+02:00",
+        rejectedOffers: [],
+      },
     });
 
     const response = await handlers.createSession(

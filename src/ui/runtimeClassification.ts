@@ -101,3 +101,17 @@ export const decisionTone: Record<
     label: "Needs human",
   },
 };
+
+/**
+ * Maps a runtime reported by the Judge backend onto a classification.
+ *
+ * The registry above stays a set of immutable definitions: nothing in the
+ * frontend may flip `LIVE_CALLE_CALL.available`. A live badge is earned only
+ * by a backend that reports `LIVE_CALLE` for an actual run — never by the mere
+ * presence of a configured backend URL.
+ */
+export function classificationForBackendRuntime(
+  runtime: "LIVE_CALLE" | "MOCK",
+): RuntimeClassificationId {
+  return runtime === "LIVE_CALLE" ? "LIVE_CALLE_CALL" : "MOCK_RUNTIME";
+}

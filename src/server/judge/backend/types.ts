@@ -1,4 +1,8 @@
-import type { ManagerEscalationContext, ManagerEscalationPort } from "../../escalation";
+import type {
+  ManagerEscalationContext,
+  ManagerEscalationPort,
+  ManagerEscalationTask,
+} from "../../escalation";
 import type { SupportedCallLocale } from "../../calle";
 
 export type AccessCodeSecret = {
@@ -23,6 +27,11 @@ export type StoredCallClaim = {
 
 export type StoredJudgeSession = {
   sessionId: string;
+  /**
+   * The server-owned run this session may act on. A session can start and read
+   * exactly one run, and the browser never chooses it.
+   */
+  runId: string;
   tokenHash: string;
   issuedAt: string;
   expiresAt: string;
@@ -52,6 +61,7 @@ export type CallClaimResult =
 
 export interface JudgeSessionStore {
   create(session: StoredJudgeSession): Promise<void>;
+  getSession(sessionId: string): Promise<StoredJudgeSession | null>;
   claimCall(input: CallClaimInput): Promise<CallClaimResult>;
   completeClaim(
     sessionId: string,
@@ -77,6 +87,31 @@ export interface EscalationContextPort {
   getEscalationContext(runId: string): Promise<ManagerEscalationContext | null>;
 }
 
+/** A run identifier and context minted by the backend, never by the browser. */
+export type PreparedJudgeRun = {
+  runId: string;
+  context: ManagerEscalationContext;
+};
+
+/**
+ * Mints the server-owned escalation run a judge session is allowed to act on.
+ *
+ * The browser cannot manufacture workflow eligibility: it never supplies a
+ * runId, a workflow state, or a set of rejected offers.
+ */
+export interface JudgeRunPreparationPort {
+  prepareRun(sessionId: string): Promise<PreparedJudgeRun>;
+}
+
+/**
+ * Read side of the manager result sink. Kept separate from the sink so the
+ * service can read a recorded terminal result without touching mutable
+ * storage internals.
+ */
+export interface ManagerResultReader {
+  read(runId: string): Promise<ManagerEscalationTask | null>;
+}
+
 export type JudgeBackendDependencies = {
   secretStore: AccessCodeSecretPort;
   sessionStore: JudgeSessionStore;
@@ -85,4 +120,6 @@ export type JudgeBackendDependencies = {
   killSwitch: GlobalKillSwitch;
   escalationContext: EscalationContextPort;
   managerCalls: ManagerEscalationPort;
+  runPreparation: JudgeRunPreparationPort;
+  managerResults: ManagerResultReader;
 };

@@ -4,6 +4,8 @@ export {
 } from "./JudgeModeBackendClient";
 export type {
   CreateJudgeSessionRequest,
+  JudgeManagerResult,
+  JudgeRunScenario,
   JudgeRunStatus,
   JudgeSession,
   StartManagerCallRequest,
