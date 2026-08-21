@@ -73,7 +73,9 @@ export type DemoCallOutcome =
   | "voicemail"
   | "incomplete"
   | "late"
-  | "expensive";
+  | "expensive"
+  | "missing-webhook"
+  | "connection-lost";
 
 export type DemoScenario = {
   requiredQuantity: number;
@@ -133,7 +135,11 @@ const baseResults: Record<string, MockSupplierResult> = {
   },
 };
 
-function failedTask(status: "failed" | "completed", evidence: string): SupplierCallTask {
+function failedTask(
+  status: "failed" | "completed",
+  outcome: "NO_ANSWER" | "VOICEMAIL" | "FAILED",
+  evidence: string,
+): SupplierCallTask {
   return {
     callId: "configured-at-runtime",
     status,
@@ -146,6 +152,24 @@ function failedTask(status: "failed" | "completed", evidence: string): SupplierC
       valid: false,
       issues: [{ field: "$", message: "No structured quote was received" }],
     },
+    outcome,
+  };
+}
+
+function pendingTask(): SupplierCallTask {
+  return {
+    callId: "configured-at-runtime",
+    status: "queued",
+    taskCompleted: false,
+    completionConfidence: null,
+    structuredResult: null,
+    evidence: ["Call accepted but no terminal webhook was received"],
+    fieldEvidence: {},
+    schemaValidation: {
+      valid: false,
+      issues: [{ field: "$", message: "Awaiting terminal CALL-E result" }],
+    },
+    outcome: "INCOMPLETE",
   };
 }
 
@@ -153,8 +177,10 @@ function scenarioResults(scenario: DemoScenario): Record<string, MockSupplierRes
   return Object.fromEntries(
     Object.entries(baseResults).map(([supplierId, original]) => {
       const outcome = scenario.supplierOutcomes[supplierId] ?? "quote";
-      if (outcome === "no-answer") return [supplierId, failedTask("failed", "No answer")];
-      if (outcome === "voicemail") return [supplierId, failedTask("completed", "Voicemail detected; no quote collected")];
+      if (outcome === "no-answer") return [supplierId, failedTask("failed", "NO_ANSWER", "No answer")];
+      if (outcome === "voicemail") return [supplierId, failedTask("completed", "VOICEMAIL", "Voicemail detected; no quote collected")];
+      if (outcome === "connection-lost") return [supplierId, failedTask("failed", "FAILED", "Connection was lost before a quote was confirmed")];
+      if (outcome === "missing-webhook") return [supplierId, pendingTask()];
 
       const result: MockSupplierResult = { ...original };
       if (supplierId === "supplier-de-01") {
