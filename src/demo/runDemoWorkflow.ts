@@ -2,10 +2,15 @@ import type {
   ExchangeRatesToEur,
   ProcurementPolicy,
 } from "../domain";
-import { MockCallEAdapter } from "../server/calle/MockCallEAdapter";
+import {
+  MockCallEAdapter,
+  type MockSupplierResult,
+  type SupplierCallTask,
+} from "../server/calle";
 import {
   MockPurchaseOrderAdapter,
   ProcurementWorkflow,
+  appendWorkflowState,
   type SupplierContact,
   type WorkflowInput,
   type WorkflowResult,
@@ -62,18 +67,118 @@ const exchangeRates: ExchangeRatesToEur = {
   GBP: 1.16,
 };
 
-function createInput(autonomousExecutionEnabled: boolean): WorkflowInput {
-  const workflowId = "wf-2026-081";
+export type DemoCallOutcome =
+  | "quote"
+  | "no-answer"
+  | "voicemail"
+  | "incomplete"
+  | "late"
+  | "expensive";
+
+export type DemoScenario = {
+  requiredQuantity: number;
+  budgetEur: number;
+  stockoutAt: string;
+  supplierOutcomes: Record<string, DemoCallOutcome>;
+  primaryOfferQuantity: number;
+  primaryOfferUnitPriceEur: number;
+};
+
+export const guidedScenario: DemoScenario = {
+  requiredQuantity: 8,
+  budgetEur: 500,
+  stockoutAt: "2026-08-28T12:00:00+02:00",
+  supplierOutcomes: {
+    "supplier-de-01": "quote",
+    "supplier-fr-01": "quote",
+    "supplier-pl-01": "late",
+  },
+  primaryOfferQuantity: 8,
+  primaryOfferUnitPriceEur: 42,
+};
+
+const baseResults: Record<string, MockSupplierResult> = {
+  "supplier-de-01": {
+    skuConfirmed: true,
+    availableQuantity: 8,
+    unitPrice: 42,
+    currency: "EUR",
+    deliveryAt: "2026-08-27T10:00:00+02:00",
+    offerValidUntil: "2026-08-22T16:00:00+02:00",
+    commercialTermsChanged: false,
+    optOutRequested: false,
+    notes: "Full quantity available before the predicted stockout.",
+  },
+  "supplier-fr-01": {
+    skuConfirmed: true,
+    availableQuantity: 6,
+    unitPrice: 38,
+    currency: "EUR",
+    deliveryAt: "2026-08-26T12:00:00+02:00",
+    offerValidUntil: "2026-08-22T17:00:00+02:00",
+    commercialTermsChanged: false,
+    optOutRequested: false,
+    notes: "Only partial quantity is available.",
+  },
+  "supplier-pl-01": {
+    skuConfirmed: true,
+    availableQuantity: 8,
+    unitPrice: 158,
+    currency: "PLN",
+    deliveryAt: "2026-08-31T10:00:00+02:00",
+    offerValidUntil: "2026-08-23T12:00:00+02:00",
+    commercialTermsChanged: false,
+    optOutRequested: false,
+    notes: "Full quantity is available, but delivery is after stockout.",
+  },
+};
+
+function failedTask(status: "failed" | "completed", evidence: string): SupplierCallTask {
+  return {
+    callId: "configured-at-runtime",
+    status,
+    taskCompleted: false,
+    completionConfidence: 0,
+    structuredResult: null,
+    evidence: [evidence],
+  };
+}
+
+function scenarioResults(scenario: DemoScenario): Record<string, MockSupplierResult | SupplierCallTask> {
+  return Object.fromEntries(
+    Object.entries(baseResults).map(([supplierId, original]) => {
+      const outcome = scenario.supplierOutcomes[supplierId] ?? "quote";
+      if (outcome === "no-answer") return [supplierId, failedTask("failed", "No answer")];
+      if (outcome === "voicemail") return [supplierId, failedTask("completed", "Voicemail detected; no quote collected")];
+
+      const result: MockSupplierResult = { ...original };
+      if (supplierId === "supplier-de-01") {
+        result.availableQuantity = scenario.primaryOfferQuantity;
+        result.unitPrice = scenario.primaryOfferUnitPriceEur;
+      }
+      if (outcome === "incomplete") result.unitPrice = null;
+      if (outcome === "late") result.deliveryAt = "2026-09-05T10:00:00+02:00";
+      if (outcome === "expensive") result.unitPrice = 60;
+      return [supplierId, result];
+    }),
+  );
+}
+
+function createInput(
+  autonomousExecutionEnabled: boolean,
+  scenario: DemoScenario,
+): WorkflowInput {
+  const workflowId = `wf-demo-${Date.now()}`;
 
   return {
     workflowId,
     inventory: {
       sku: "CF-220",
       onHand: 8,
-      confirmedDemand: 14,
+      confirmedDemand: scenario.requiredQuantity + 6,
       inboundConfirmed: 0,
       safetyStock: 2,
-      stockoutAt: "2026-08-28T12:00:00+02:00",
+      stockoutAt: scenario.stockoutAt,
     },
     suppliers,
     callAuthorization: {
@@ -85,7 +190,10 @@ function createInput(autonomousExecutionEnabled: boolean): WorkflowInput {
       allowedSupplierIds: suppliers.map(({ supplierId }) => supplierId),
       allowedPhoneNumbers: suppliers.map(({ phoneE164 }) => phoneE164),
     },
-    procurementPolicy: policy,
+    procurementPolicy: {
+      ...policy,
+      autonomousOrderLimitEur: scenario.budgetEur,
+    },
     exchangeRates,
     autonomousExecutionEnabled,
   };
@@ -93,13 +201,14 @@ function createInput(autonomousExecutionEnabled: boolean): WorkflowInput {
 
 export async function runDemoWorkflow(
   autonomousExecutionEnabled: boolean,
+  scenario: DemoScenario = guidedScenario,
 ): Promise<WorkflowResult> {
   const workflow = new ProcurementWorkflow(
-    new MockCallEAdapter(),
+    new MockCallEAdapter(scenarioResults(scenario)),
     new MockPurchaseOrderAdapter(),
   );
 
-  const input = createInput(autonomousExecutionEnabled);
+  const input = createInput(autonomousExecutionEnabled, scenario);
   const result = await workflow.run(input);
 
   if (!result.proof || !result.decision?.selectedOffer || !result.decision.validation) {
@@ -133,6 +242,13 @@ export async function runDemoWorkflow(
     orderValueEur: result.proof.orderValueEur,
     auditChain,
   });
+  result.stateHistory = appendWorkflowState(
+    result.stateHistory,
+    "PROOF_SIGNED",
+    "Decision proof signed with the explicit demo signer",
+    new Date().toISOString(),
+  );
+  result.workflowState = "PROOF_SIGNED";
 
   return result;
 }
