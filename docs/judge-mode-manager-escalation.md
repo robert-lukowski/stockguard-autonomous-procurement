@@ -65,7 +65,7 @@ No valid access code, API credential or server-side authorization decision belon
 
 The TypeScript browser-to-backend contract is implemented in `src/server/judge`. Without a configured backend URL, it fails before transmitting the access code or number.
 
-The framework-neutral backend core is implemented in `src/server/judge/backend`. It can be wrapped by Lambda handlers later and currently provides:
+The framework-neutral backend core is implemented in `src/server/judge/backend`. The AWS-facing contracts in `src/server/judge/aws` wrap it without coupling the domain service to an AWS SDK and currently provide:
 
 - PBKDF2-SHA256 access-code verification with a salted derived key supplied through a secret-store port;
 - random opaque session tokens stored only as SHA-256 hashes;
@@ -75,9 +75,15 @@ The framework-neutral backend core is implemented in `src/server/judge/backend`.
 - a global call budget and fail-closed kill switch;
 - phone-number hashing instead of plaintext session persistence;
 - fail-closed webhook authenticity, event deduplication and event-ID conflict detection;
-- structured-result quarantine before workflow ingestion.
+- structured-result quarantine before workflow ingestion;
+- API Gateway-compatible request/response handlers with no-store responses and
+  safe error mapping;
+- DynamoDB conditional-write commands for one-call claims, fixed-window rate
+  limiting, the global call budget and persistent webhook deduplication;
+- a Secrets Manager adapter that accepts only the expected PBKDF2-SHA256 secret
+  schema and rejects plaintext or weak records.
 
-All current persistence, rate-limit and budget implementations are in-memory test adapters. They demonstrate semantics but are not suitable for a distributed deployment.
+Both in-memory test adapters and DynamoDB command adapters exist. The latter are tested against a fake document client so concurrency conditions remain explicit, but an AWS SDK client facade and deployed table are still required for live use. No AWS resource is created by this repository state.
 
 ## Proposed AWS deployment
 
@@ -105,6 +111,14 @@ Suggested DynamoDB records:
 - `CallAttempt`: CALL-E task ID, idempotency key and terminal outcome;
 - `WebhookEvent`: provider event ID used for conditional deduplication;
 - `DecisionProof`: canonical payload, audit root, signature and KMS key ID.
+
+The implemented Judge-session record uses a conditional create, DynamoDB TTL and
+a consistent read before an atomic claim. The claim update checks the hashed
+session token, active status, server-side expiry and idempotency key in one
+condition, preventing two concurrent submissions from consuming two calls.
+Webhook IDs use a conditional put; a repeated ID with the same body hash is a
+duplicate, while the same ID with different content is treated as a conflict.
+Only the phone hash is persisted in the session claim.
 
 The access-code hash belongs in Secrets Manager or an equivalently protected backend secret. Phone numbers and transcripts receive minimal TTL retention, encryption at rest, redacted logs and an explicit deletion path.
 
@@ -143,9 +157,10 @@ The record is a **cryptographically signed, machine-verifiable decision record w
 1. **Complete:** public mock manager escalation, formal states, bounded result schema, evidence guardrail and Decision Proof v2.
 2. **Complete:** fail-closed frontend-to-backend contracts with no embedded access code.
 3. **Complete:** local backend core for PBKDF2 verification, opaque sessions, one-call claims, rate limiting, global budget and fail-closed webhooks.
-4. **Next:** add Lambda/API Gateway adapters and persistent DynamoDB conditional writes without deploying them.
-5. **Next:** connect CALL-E credentials server-side and verify the exact webhook authenticity mechanism from official documentation.
-6. **Next:** run consented calls only to verified test participants and validate supported countries, latency, voicemail and transcript behavior.
-7. **Final:** enable the Devpost-only code, global call budget, kill switch, deletion control and KMS signer.
+4. **Complete as undeployed contracts:** API Gateway/Lambda handlers, DynamoDB conditional-write adapters and the Secrets Manager access-code adapter.
+5. **Next:** add the AWS SDK composition root, infrastructure definition and deployment configuration, but do not deploy until explicitly authorized.
+6. **Next:** connect CALL-E credentials server-side and verify the exact webhook authenticity mechanism from official documentation.
+7. **Next:** run consented calls only to verified test participants and validate supported countries, latency, voicemail and transcript behavior.
+8. **Final:** enable the Devpost-only code, global call budget, kill switch, deletion control and KMS signer.
 
 No live call or paid AWS resource is created by the current implementation.
