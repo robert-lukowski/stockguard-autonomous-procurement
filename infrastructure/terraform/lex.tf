@@ -48,12 +48,22 @@ resource "aws_iam_role" "lex_bot" {
   assume_role_policy = data.aws_iam_policy_document.lex_assume.json
 }
 
-# AWS-managed policy purpose-built for Lex V2 bots (Polly synthesis and
-# CloudWatch metrics). Narrower than anything we could hand-write, and it
-# grants no data-plane access to our account resources.
-resource "aws_iam_role_policy_attachment" "lex_bot" {
-  role       = aws_iam_role.lex_bot.name
-  policy_arn = "arn:aws:iam::aws:policy/aws-service-role/AmazonLexV2BotPolicy"
+# AmazonLexV2BotPolicy lives under the AWS `aws-service-role/` path and cannot
+# be attached to a customer-managed role. Its effective permission for this
+# voice bot is Polly speech synthesis, so keep that single permission inline
+# rather than broadening the role with a generic Polly managed policy.
+resource "aws_iam_role_policy" "lex_bot" {
+  name = "polly-synthesis"
+  role = aws_iam_role.lex_bot.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "SynthesizeSpeech"
+      Effect   = "Allow"
+      Action   = "polly:SynthesizeSpeech"
+      Resource = "*"
+    }]
+  })
 }
 
 resource "aws_lexv2models_bot_locale" "en" {
