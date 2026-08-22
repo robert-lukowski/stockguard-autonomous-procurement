@@ -75,6 +75,29 @@ jobs:
             exit 1
           }
 
+      # Chooses the safety policy for this apply, and refuses before any AWS
+      # credential is requested if the requested toggle combination has no
+      # reviewed policy. There is no path that applies without a policy.
+      - name: Select apply policy mode
+        shell: bash
+        env:
+          SIMULATOR: ${{ inputs.simulator_enabled }}
+          RECORDING: ${{ inputs.enable_call_recording }}
+        run: |
+          set -euo pipefail
+          if [ "$RECORDING" != "false" ]; then
+            echo "::error::enable_call_recording=${RECORDING} has no reviewed apply policy."
+            echo "::error::Attaching a CALL_RECORDINGS configuration replaces whatever the Connect instance already has, and that baseline has not been captured. Capture it first."
+            exit 1
+          fi
+          case "$SIMULATOR" in
+            false) MODE=initial ;;
+            true)  MODE=qualification ;;
+            *) echo "::error::simulator_enabled must be true or false, got '${SIMULATOR}'"; exit 1 ;;
+          esac
+          echo "PLAN_POLICY_MODE=${MODE}" >> "$GITHUB_ENV"
+          echo "::notice::Apply safety policy: ${MODE}"
+
       - name: Enforce main branch and repository identity
         shell: bash
         run: |
@@ -145,16 +168,64 @@ jobs:
         working-directory: infrastructure/terraform
         run: terraform plan -no-color -out=tfplan
 
+      - name: Render the plan as JSON
+        working-directory: infrastructure/terraform
+        run: terraform show -json tfplan > tfplan.json
+
+      # The same gate the plan workflow runs, applied to THIS plan. The plan a
+      # human reviewed earlier and the plan about to be applied are different
+      # documents: state or the account may have moved in between. Only the
+      # second one can be trusted, so only the second one decides.
+      - name: Enforce the plan safety policy
+        working-directory: infrastructure/terraform
+        run: |
+          set -euo pipefail
+          node ../../scripts/terraform/assertQualificationPlan.mjs \
+            --plan tfplan.json \
+            --mode "$PLAN_POLICY_MODE" \
+            --report plan-policy-report.json | tee policy.txt
+
+      - name: Upload the plan policy report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-apply-policy-report
+          path: infrastructure/terraform/plan-policy-report.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      # Unreachable unless the gate above exited zero.
       - name: Terraform apply the saved plan
         working-directory: infrastructure/terraform
         run: terraform apply -no-color -auto-approve tfplan
+
+      # Read-only. Confirms the apply produced the intended runtime and nothing
+      # else. It never invokes the Lambda, drives Lex, or touches Connect.
+      - name: Verify the deployed runtime (read-only)
+        working-directory: infrastructure/terraform
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          INSTANCE_ID: ${{ secrets.AWS_CONNECT_INSTANCE_ID }}
+          SIMULATOR: ${{ inputs.simulator_enabled }}
+        run: |
+          set -euo pipefail
+          terraform output -json > tf-outputs.json
+          ../../scripts/qualification/verifyAwsRuntime.sh \
+            --outputs tf-outputs.json \
+            --instance-id "$INSTANCE_ID" \
+            --region "$AWS_REGION" \
+            --expect-simulator "$SIMULATOR" \
+            --expect-recording false
 
       - name: Remaining manual steps
         shell: bash
         run: |
           {
             echo '### Still required, manually'
-            echo '1. `aws connect associate-bot --lex-v2-bot ...` (see the terraform output; provider gap #30869)'
-            echo '2. Assign the existing +1 number to the new contact flow in the Connect console'
-            echo '3. Set `simulator_enabled = true` only immediately before a controlled qualification call'
+            echo 'Full sequence, including rollback: `docs/aws-qualification-post-apply-runbook.md`'
+            echo ''
+            echo '1. Capture the CURRENT inbound flow of the existing +1 number in the Connect console, before changing anything'
+            echo '2. `aws connect associate-bot --lex-v2-bot ...` (see the terraform output; provider gap #30869)'
+            echo '3. Assign the existing +1 number to the new contact flow ONLY when the qualification stage is approved'
+            echo '4. Set `simulator_enabled = true` only immediately before a controlled qualification call'
           } >> "$GITHUB_STEP_SUMMARY"

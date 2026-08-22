@@ -170,6 +170,29 @@ jobs:
           test "$GITHUB_REPOSITORY_ID" = "1341560793"
           test "$GITHUB_REPOSITORY_OWNER_ID" = "207513888"
 
+      # Chooses the safety policy for this dispatch, and fails before any AWS
+      # credential is requested if the requested toggle combination has no
+      # reviewed policy. The gate is never skipped, only satisfied.
+      - name: Select plan policy mode
+        shell: bash
+        env:
+          SIMULATOR: ${{ inputs.simulator_enabled }}
+          RECORDING: ${{ inputs.enable_call_recording }}
+        run: |
+          set -euo pipefail
+          if [ "$RECORDING" != "false" ]; then
+            echo "::error::enable_call_recording=${RECORDING} has no reviewed plan policy."
+            echo "::error::Attaching a CALL_RECORDINGS configuration replaces whatever the Connect instance already has, and that baseline has not been captured. Capture it first."
+            exit 1
+          fi
+          case "$SIMULATOR" in
+            false) MODE=initial ;;
+            true)  MODE=qualification ;;
+            *) echo "::error::simulator_enabled must be true or false, got '${SIMULATOR}'"; exit 1 ;;
+          esac
+          echo "PLAN_POLICY_MODE=${MODE}" >> "$GITHUB_ENV"
+          echo "::notice::Plan safety policy: ${MODE}"
+
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -241,13 +264,42 @@ jobs:
           set -euo pipefail
           terraform plan -no-color -out=tfplan | tee plan.txt
 
-      - name: Summarize plan
+      # The safety gate reads Terraform's machine-readable change model, not
+      # the human-readable plan text. tfplan and tfplan.json stay on the runner:
+      # they embed the account id, role ARNs and the contact-flow body.
+      - name: Render the plan as JSON
+        working-directory: infrastructure/terraform
+        run: terraform show -json tfplan > tfplan.json
+
+      - name: Enforce the plan safety policy
+        working-directory: infrastructure/terraform
+        run: |
+          set -euo pipefail
+          node ../../scripts/terraform/assertQualificationPlan.mjs \
+            --plan tfplan.json \
+            --mode "$PLAN_POLICY_MODE" \
+            --report plan-policy-report.json | tee policy.txt
+
+      # Sanitized by construction: addresses, types and counts only.
+      - name: Upload the plan policy report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-policy-report
+          path: infrastructure/terraform/plan-policy-report.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      # Only reached when the gate above passed, so "reviewable" means the plan
+      # already satisfies the policy and now needs a human.
+      - name: Summarize the reviewable plan
         shell: bash
         run: |
           set -euo pipefail
           {
-            echo '### Terraform plan'
+            echo '### Terraform plan · passed the safety policy'
             echo ''
+            echo "policy mode: \`${PLAN_POLICY_MODE}\`"
             echo "simulator_enabled: \`${{ inputs.simulator_enabled }}\`"
             echo "enable_call_recording: \`${{ inputs.enable_call_recording }}\`"
             echo ''
@@ -256,4 +308,10 @@ jobs:
             # so it stays in the job log rather than the summary.
             grep -E '^(Plan:|No changes)' infrastructure/terraform/plan.txt || echo 'see job log'
             echo '```'
+            echo ''
+            echo '```'
+            cat infrastructure/terraform/policy.txt
+            echo '```'
+            echo ''
+            echo 'Review the plan in the job log before running Terraform Apply.'
           } >> "$GITHUB_STEP_SUMMARY"

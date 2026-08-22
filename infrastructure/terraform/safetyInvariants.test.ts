@@ -269,6 +269,93 @@ describe("workflow safety invariants", () => {
     }
   });
 
+  // -------------------------------------------------------------------------
+  // The machine plan gate. Human plan review is necessary but not sufficient:
+  // the properties below are mechanical, so a machine holds them.
+  // -------------------------------------------------------------------------
+
+  const stepBlock = (yaml: string, name: string) => {
+    const stripped = withoutComments(yaml);
+    const start = stripped.indexOf(`- name: ${name}`);
+    expect(start).toBeGreaterThan(-1);
+    const next = stripped.indexOf("\n      - name:", start + 1);
+    return stripped.slice(start, next === -1 ? stripped.length : next);
+  };
+
+  it("gates both workflows on the same policy checker", () => {
+    for (const workflow of [plan, apply]) {
+      const stripped = withoutComments(workflow);
+      expect(stripped).toContain("terraform show -json tfplan > tfplan.json");
+      expect(stripped).toContain("scripts/terraform/assertQualificationPlan.mjs");
+      expect(stripped).toContain('--plan tfplan.json');
+      expect(stripped).toContain('--mode "$PLAN_POLICY_MODE"');
+    }
+  });
+
+  it("runs the gate before apply, never after", () => {
+    const stripped = withoutComments(apply);
+    const gate = stripped.indexOf("assertQualificationPlan.mjs");
+    const applyStep = stripped.indexOf("terraform apply");
+    expect(gate).toBeGreaterThan(-1);
+    expect(applyStep).toBeGreaterThan(-1);
+    expect(gate).toBeLessThan(applyStep);
+  });
+
+  it("cannot skip the gate with a step condition", () => {
+    for (const workflow of [plan, apply]) {
+      // `if:` on this step would let a plan through unchecked whenever the
+      // condition happened to be false.
+      expect(stepBlock(workflow, "Enforce the plan safety policy")).not.toMatch(/^\s+if:/m);
+      expect(stepBlock(workflow, "Render the plan as JSON")).not.toMatch(/^\s+if:/m);
+    }
+  });
+
+  it("fails closed instead of skipping when recording is requested", () => {
+    for (const [workflow, step] of [
+      [plan, "Select plan policy mode"],
+      [apply, "Select apply policy mode"],
+    ] as [string, string][]) {
+      const block = stepBlock(workflow, step);
+      expect(block).toContain('if [ "$RECORDING" != "false" ]');
+      expect(block).toContain("exit 1");
+      // false selects the initial policy, true selects qualification; anything
+      // else is refused rather than defaulted.
+      expect(block).toContain("MODE=initial");
+      expect(block).toContain("MODE=qualification");
+    }
+  });
+
+  it("selects the policy mode before any AWS credential is requested", () => {
+    for (const [workflow, step] of [
+      [plan, "Select plan policy mode"],
+      [apply, "Select apply policy mode"],
+    ] as [string, string][]) {
+      const stripped = withoutComments(workflow);
+      expect(stripped.indexOf(`- name: ${step}`)).toBeLessThan(
+        stripped.indexOf("configure-aws-credentials"),
+      );
+    }
+  });
+
+  it("never uploads the raw plan, only the sanitized policy report", () => {
+    for (const workflow of [plan, apply]) {
+      const stripped = withoutComments(workflow);
+      expect(stripped).toContain("plan-policy-report.json");
+      // tfplan and tfplan.json embed the account id, role ARNs and the
+      // contact-flow body, so they must never leave the runner.
+      expect(stripped).not.toMatch(/path:.*tfplan/);
+      expect(stripped).not.toMatch(/path:.*plan\.txt/);
+    }
+  });
+
+  it("verifies the deployed runtime read-only after apply", () => {
+    const stripped = withoutComments(apply);
+    const applyStep = stripped.indexOf("terraform apply");
+    const verify = stripped.indexOf("scripts/qualification/verifyAwsRuntime.sh");
+    expect(verify).toBeGreaterThan(applyStep);
+    expect(stripped).toContain("--expect-recording false");
+  });
+
   it("leaves the read-only inventory workflow read-only", () => {
     const inventory = repoFile(".github", "workflows", "aws-readonly-inventory.yml");
     expect(inventory).not.toMatch(/terraform/i);
