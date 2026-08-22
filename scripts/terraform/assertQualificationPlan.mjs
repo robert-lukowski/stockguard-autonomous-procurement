@@ -212,8 +212,18 @@ function unwrapBlock(value) {
  * @returns {{ state: "known" | "unknown" | "absent", value: string | null }}
  */
 export function readSimulatorFlag(change) {
-  const vars = unwrapBlock(change?.after?.environment)?.variables;
-  const unknownVars = unwrapBlock(change?.after_unknown?.environment)?.variables;
+  return readSimulatorFlagFrom(change?.after, change?.after_unknown);
+}
+
+/**
+ * Same extraction against an arbitrary side of the change. `before` is prior
+ * state and so is never unknown, but it is read through the same code path so
+ * the two sides cannot drift apart.
+ * @returns {{ state: "known" | "unknown" | "absent", value: string | null }}
+ */
+export function readSimulatorFlagFrom(side, unknownSide) {
+  const vars = unwrapBlock(side?.environment)?.variables;
+  const unknownVars = unwrapBlock(unknownSide?.environment)?.variables;
 
   if (unknownVars === true || unknownVars?.SIMULATOR_ENABLED === true) {
     return { state: "unknown", value: null };
@@ -270,13 +280,33 @@ export function evaluatePlan(plan, { mode }) {
   const allowedManagedActions =
     mode === "initial" ? new Set(["create", "no-op"]) : new Set(["no-op"]);
 
+  /**
+   * The one SIMULATOR_ENABLED transition each mode exists to perform.
+   *
+   * Qualification arms the runtime. Initial covers BOTH the first deployment
+   * and the rollback that disarms afterwards - a rollback selects
+   * simulator_enabled=false, which is the initial policy, and disarming is a
+   * legitimate `update` to a resource that already exists. Without this the
+   * rollback in the runbook could not be executed through the gated path at
+   * all, which would have pushed the operator to disarm by hand.
+   *
+   * It stays exactly one update to exactly one resource, changing exactly one
+   * environment variable, under the same immutable-attribute protections as
+   * arming. No other update permission is widened.
+   */
+  const flagTransition =
+    mode === "qualification"
+      ? { from: "false", to: "true", verb: "arming" }
+      : { from: "true", to: "false", verb: "disarming" };
+
   /** @type {Record<string, number>} */
   const counts = {};
   const unexpected = [];
   const present = [];
   let simulatorFlag = null;
   let lambdaCodeChanged = false;
-  let armingUpdates = 0;
+  let flagUpdates = 0;
+  let flagChange = null;
 
   // --- 1. Input variables. Known before any resource is inspected. ----------
   const declaredSimulator = plan.variables?.simulator_enabled?.value;
@@ -336,16 +366,16 @@ export function evaluatePlan(plan, { mode }) {
       );
     } else if (!allowedManagedActions.has(action)) {
       // 2b. update in initial mode, or any unrecognised action anywhere.
-      const isArming = mode === "qualification" && action === "update" && address === SIMULATOR_ARMING_ADDRESS;
-      if (isArming) {
-        armingUpdates += 1;
+      // The simulator flag update is the ONLY update either policy permits,
+      // and the transition it must carry is checked below.
+      const isFlagUpdate = action === "update" && address === SIMULATOR_ARMING_ADDRESS;
+      if (isFlagUpdate) {
+        flagUpdates += 1;
       } else if (action === "update") {
         add(
           "update-action",
           address,
-          mode === "initial"
-            ? "updates an existing managed resource; the initial deployment accepts create, read and no-op only"
-            : `qualification policy permits an update to ${SIMULATOR_ARMING_ADDRESS} only`,
+          `the ${mode} policy permits exactly one update, ${flagTransition.verb} ${SIMULATOR_ARMING_ADDRESS}; every other managed resource must be create, read or no-op`,
         );
       } else if (action === "create") {
         add(
@@ -387,7 +417,7 @@ export function evaluatePlan(plan, { mode }) {
 
       const flag = readSimulatorFlag(rc.change);
       simulatorFlag = flag;
-      const wanted = mode === "qualification" ? "true" : "false";
+      const wanted = flagTransition.to;
       if (flag.state !== "known") {
         add(
           "simulator-flag-unresolved",
@@ -415,11 +445,31 @@ export function evaluatePlan(plan, { mode }) {
       }
 
       if (action === "update") {
-        // Arming may change the environment and, if the bundle rebuild is not
-        // byte-identical, the code hash. It may change nothing else.
+        // The update must be the flag transition this mode exists to perform,
+        // and nothing else. `before` is prior state, so a value that is not
+        // known there means the transition cannot be confirmed - fail closed
+        // rather than infer it from `after` alone.
+        const beforeFlag = readSimulatorFlagFrom(before);
+        flagChange = `${beforeFlag.value ?? beforeFlag.state} -> ${flag.value ?? flag.state}`;
+        if (beforeFlag.state !== "known") {
+          add(
+            "simulator-flag-unresolved",
+            address,
+            `SIMULATOR_ENABLED is ${beforeFlag.state} in the plan's prior state, so this cannot be confirmed to be the ${flagTransition.verb} update the ${mode} policy permits`,
+          );
+        } else if (beforeFlag.value !== flagTransition.from) {
+          add(
+            "simulator-flag-transition",
+            address,
+            `the only update the ${mode} policy permits here is ${flagTransition.verb}: SIMULATOR_ENABLED "${flagTransition.from}" -> "${flagTransition.to}". This plan starts from "${beforeFlag.value}".`,
+          );
+        }
+
+        // The transition may change the environment and, if the bundle rebuild
+        // is not byte-identical, the code hash. It may change nothing else.
         const frozen = changedKeys(before, after, LAMBDA_IMMUTABLE_ATTRIBUTES);
         for (const key of frozen) {
-          add("lambda-attribute-change", address, `arming must not change ${key}`);
+          add("lambda-attribute-change", address, `${flagTransition.verb} must not change ${key}`);
         }
         const beforeEnv = envVariables(before);
         const afterEnv = envVariables(after);
@@ -427,7 +477,7 @@ export function evaluatePlan(plan, { mode }) {
         for (const key of envKeys) {
           if (key === "SIMULATOR_ENABLED") continue;
           if (JSON.stringify(beforeEnv[key]) !== JSON.stringify(afterEnv[key])) {
-            add("lambda-env-change", address, `arming must not change environment variable ${key}`);
+            add("lambda-env-change", address, `${flagTransition.verb} must not change environment variable ${key}`);
           }
         }
         lambdaCodeChanged = before.source_code_hash !== after.source_code_hash;
@@ -435,7 +485,9 @@ export function evaluatePlan(plan, { mode }) {
     }
   }
 
-  if (mode === "qualification" && armingUpdates === 0 && violations.length === 0) {
+  // Initial mode has no equivalent requirement: it is also the first-deployment
+  // policy, where there is nothing to disarm.
+  if (mode === "qualification" && flagUpdates === 0 && violations.length === 0) {
     add(
       "nothing-to-arm",
       SIMULATOR_ARMING_ADDRESS,
@@ -450,6 +502,7 @@ export function evaluatePlan(plan, { mode }) {
     lambdaCodeChanged,
     declaredSimulator,
     declaredRecording,
+    flagChange,
   });
 }
 
@@ -474,6 +527,7 @@ function finish(plan, mode, violations, simulatorFlag, extra) {
     declaredSimulatorEnabled: extra.declaredSimulator ?? null,
     declaredCallRecording: extra.declaredRecording ?? null,
     lambdaCodeChanged: Boolean(extra.lambdaCodeChanged),
+    simulatorFlagChange: extra.flagChange ?? null,
     recordingResourcesPresent: violations.some(
       (v) => v.code === "forbidden:recording-storage" || v.code === "forbidden:connect-storage-config",
     ),
@@ -505,6 +559,9 @@ export function formatReport(result) {
     `  simulator armed              ${result.simulatorEnabled === "true" ? "yes" : result.simulatorEnabled === "false" ? "no" : `undetermined (${result.simulatorEnabled})`}`,
     `  recording resources present  ${yesNo(result.recordingResourcesPresent)}`,
   ];
+  if (result.simulatorFlagChange) {
+    lines.push(`  SIMULATOR_ENABLED change     ${result.simulatorFlagChange}`);
+  }
   if (result.lambdaCodeChanged) lines.push("  lambda bundle hash changed   yes");
   if (result.expectedMissing.length > 0) {
     lines.push(`  note: not in this plan       ${result.expectedMissing.join(", ")}`);

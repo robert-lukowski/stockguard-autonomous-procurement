@@ -56,12 +56,21 @@ script and rejecting any mutating verb.
 It confirms: the Lambda exists on `nodejs22.x` with `SIMULATOR_ENABLED=false`,
 a bounded reserved concurrency and a resource policy naming `lexv2.amazonaws.com`;
 the Lex bot, its built `en_US` locale and a `qualification` alias pointing at a
-**numbered** version rather than `DRAFT`; the StockGuard contact flow; that no
-telephone number is bound to that flow; and that no StockGuard recording
-configuration was attached.
+**numbered** version rather than `DRAFT`; the StockGuard contact flow; and that
+no StockGuard recording configuration was attached.
+
+It reports one item as `MANUAL` rather than checking it: **whether any phone
+number is routed to the StockGuard flow**. No AWS API exposes that association
+— `describe-phone-number` returns `TargetArn`, which identifies the Connect
+instance, not the inbound contact flow. An earlier version of the script
+compared those two values and reported a `PASS`; that comparison could never
+fail, so it was evidence of nothing and has been removed. Step 3 below is how
+that question actually gets answered.
 
 Fix any `FAIL` before going further. A failure here is cheaper than a failure
-mid-call.
+mid-call. A `MANUAL` line is not a failure, but it is not a pass either — the
+closing summary counts them so a run with outstanding manual items cannot be
+mistaken for a clean bill of health.
 
 ---
 
@@ -138,6 +147,12 @@ Assignment is the point of no return for whatever that number does today. It
 belongs to the qualification stage, not to deployment. Continue only when the
 operator has decided to run the call now.
 
+Terraform does not assign the number: this configuration declares no
+phone-number resource, and the plan safety gate refuses any plan that
+introduces one. That is an argument from the configuration, though, not an
+observation of the live instance — the console remains the only place the
+current association can actually be read.
+
 ---
 
 ## 8. Qualification stage
@@ -159,11 +174,15 @@ Actions → Terraform Apply → Run workflow on `main`:
 
 This selects the **qualification** plan policy automatically. That policy
 accepts exactly one change — an `update` to
-`aws_lambda_function.supplier_simulator` that flips `SIMULATOR_ENABLED` to
-`"true"` — and rejects any create, delete, replacement, any update to any other
-resource, and any change to the function's role, runtime, timeout, memory,
-reserved concurrency or other environment variables. Nothing else can ride
-along with the arming.
+`aws_lambda_function.supplier_simulator` that flips `SIMULATOR_ENABLED` from
+`"false"` to `"true"` — and rejects any create, delete, replacement, any update
+to any other resource, and any change to the function's role, runtime, timeout,
+memory, reserved concurrency or other environment variables. Nothing else can
+ride along with the arming.
+
+The direction is checked, not just the destination: a plan whose prior state is
+not `"false"` is refused, so this mode cannot be used to disarm. Step 9.2 is the
+mirror image and is the only path that can.
 
 **8b. Verify the Lambda is armed.**
 
@@ -207,9 +226,14 @@ step 9 runs after a successful qualification too.
    flow you recorded in step 3. Save. Verify by reopening the number.
 2. **Disarm the simulator.** Terraform Apply with `confirm=APPLY`,
    `simulator_enabled=false`, `enable_call_recording=false`. This runs under
-   the **initial** policy, which accepts create/read/no-op only — so if state
-   has drifted such that disarming would now destroy or replace something, the
-   gate stops it and you disarm by hand instead.
+   the **initial** policy, which permits exactly one update — to
+   `aws_lambda_function.supplier_simulator`, changing `SIMULATOR_ENABLED` from
+   `"true"` to `"false"` and nothing else. Every other managed resource must be
+   create, read or no-op, and the function's role, runtime, handler, timeout,
+   memory, reserved concurrency and every other environment variable must be
+   unchanged — the same protections that apply to arming. If state has drifted
+   so that disarming would destroy, replace or update anything else, the gate
+   stops the apply and you disarm by hand instead.
 3. **Remove the Lex association only if you need to.** It is inert once the
    number no longer routes to the StockGuard flow, so prefer leaving it:
    ```bash

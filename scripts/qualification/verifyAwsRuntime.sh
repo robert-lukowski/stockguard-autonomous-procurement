@@ -47,9 +47,14 @@ done
 # --- helpers ---------------------------------------------------------------
 
 FAILURES=0
+MANUAL_CHECKS=0
 pass() { printf '  PASS  %s\n' "$1"; }
 fail() { printf '  FAIL  %s\n' "$1"; FAILURES=$((FAILURES + 1)); }
 info() { printf '  ..    %s\n' "$1"; }
+# Neither a pass nor a failure: something this script genuinely cannot
+# determine, which a human must check instead. Counted so it cannot be
+# mistaken for a clean bill of health.
+manual() { printf '  MANUAL  %s\n' "$1"; MANUAL_CHECKS=$((MANUAL_CHECKS + 1)); }
 
 # Identifiers are operationally useful but do not need to be printed in full.
 mask() {
@@ -182,21 +187,22 @@ else
   fail "contact flow $(mask "$FLOW_ID") not found"
 fi
 
-# Terraform must not have assigned the number. Assignment is a deliberate,
-# manual, separately approved act performed in the console.
-PHONE_TARGETS="$(aws connect list-phone-numbers-v2 --region "$REGION" \
-  --query "ListPhoneNumbersSummaryList[].PhoneNumberId" --output text 2>/dev/null || true)"
-ASSIGNED_TO_FLOW=0
-for pid in $PHONE_TARGETS; do
-  BOUND="$(aws connect describe-phone-number --region "$REGION" --phone-number-id "$pid" \
-    --query "ClaimedPhoneNumberSummary.TargetArn" --output text 2>/dev/null || true)"
-  case "$BOUND" in *"$FLOW_ID"*) ASSIGNED_TO_FLOW=1 ;; esac
-done
-if [ "$ASSIGNED_TO_FLOW" -eq 0 ]; then
-  pass "no telephone number is bound to the StockGuard flow"
-else
-  info "a number is already bound to the StockGuard flow - expected only during an approved qualification"
-fi
+# The phone-number -> inbound contact-flow association is NOT readable through
+# any AWS API. `describe-phone-number` returns TargetArn, which identifies the
+# Connect instance (or a traffic distribution group) - never the contact flow.
+#
+# An earlier version of this script compared TargetArn against the flow id and
+# reported "no telephone number is bound to the StockGuard flow". That check
+# could never fail, because the two values are different kinds of identifier:
+# it was a vacuous PASS that would have read as evidence while proving
+# nothing. A check that cannot fail is worse than no check, so it is gone.
+#
+# Terraform does not assign the number - `aws_connect_contact_flow` carries no
+# number association and this configuration has no phone-number resource, which
+# the plan safety gate independently enforces. But that is an argument from the
+# configuration, not an observation of the live instance, so it is not a PASS
+# either.
+manual "phone number -> contact flow association cannot be read via any AWS API (describe-phone-number returns the instance ARN, not the flow); confirm in the Amazon Connect console - see docs/aws-qualification-post-apply-runbook.md step 3"
 
 # Recording must be absent unless it was deliberately requested.
 STORAGE="$(aws connect list-instance-storage-configs --region "$REGION" \
@@ -225,8 +231,11 @@ case "$LEX_ASSOC" in
 esac
 
 echo
+if [ "$MANUAL_CHECKS" -gt 0 ]; then
+  echo "${MANUAL_CHECKS} item(s) marked MANUAL are NOT verified by this script and still need a human."
+fi
 if [ "$FAILURES" -eq 0 ]; then
-  echo "Verification passed. No AWS resource was modified, no call was placed."
+  echo "Automated checks passed. No AWS resource was modified, no call was placed."
   exit 0
 fi
 echo "Verification found ${FAILURES} problem(s). No AWS resource was modified, no call was placed."

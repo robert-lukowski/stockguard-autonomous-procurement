@@ -101,6 +101,35 @@ function qualificationArmingPlan(extra: unknown[] = []) {
   };
 }
 
+/**
+ * The plan that disarms an already-armed runtime and changes nothing else.
+ * This is the rollback path: `simulator_enabled=false` selects the INITIAL
+ * policy, and disarming is a genuine `update` to a resource that exists.
+ */
+function disarmPlan(overrides: Record<string, unknown> = {}, extra: unknown[] = []) {
+  return {
+    format_version: "1.2",
+    terraform_version: "1.14.5",
+    variables: {
+      simulator_enabled: { value: false },
+      enable_call_recording: { value: false },
+    },
+    resource_changes: [
+      ...ARCHITECTURE_A_RESOURCES.map((address: string) => {
+        if (address !== SIMULATOR_ARMING_ADDRESS) return change(address, ["no-op"], {}, {});
+        return change(
+          address,
+          ["update"],
+          lambdaAttributes(overrides),
+          // Prior state: armed.
+          lambdaAttributes({ environment: [{ variables: { ...LAMBDA_ENV, SIMULATOR_ENABLED: "true" } }] }),
+        );
+      }),
+      ...extra,
+    ],
+  };
+}
+
 function codes(plan: unknown, mode: string): string[] {
   return evaluatePlan(plan, { mode }).violations.map((v: { code: string }) => v.code);
 }
@@ -260,13 +289,22 @@ describe("initial deployment policy - refused plans", () => {
   });
 
   it("refuses an update to an existing managed resource", () => {
-    const plan = initialCreatePlan();
-    const lambda = plan.resource_changes.find(
-      (rc: { address: string }) => rc.address === SIMULATOR_ARMING_ADDRESS,
-    ) as { change: Record<string, unknown> };
-    lambda.change.actions = ["update"];
-    lambda.change.before = lambdaAttributes();
-    expect(codes(plan, "initial")).toContain("update-action");
+    // Any resource except the simulator Lambda, whose SIMULATOR_ENABLED
+    // transition is the single update either policy permits.
+    for (const address of [
+      "aws_connect_contact_flow.supplier_simulator",
+      "aws_lexv2models_bot.supplier_simulator",
+      "aws_iam_role.lex_bot",
+      "aws_lambda_permission.lex_invoke",
+    ]) {
+      const plan = initialCreatePlan();
+      const target = plan.resource_changes.find(
+        (rc: { address: string }) => rc.address === address,
+      ) as { change: Record<string, unknown> };
+      target.change.actions = ["update"];
+      target.change.before = {};
+      expect(codes(plan, "initial")).toContain("update-action");
+    }
   });
 
   it("refuses a resource outside the allowlist", () => {
@@ -516,6 +554,113 @@ describe("qualification policy - arming an existing runtime", () => {
     ) as { change: { after: Record<string, unknown> } };
     lambda.change.after = lambdaAttributes();
     expect(codes(plan, "qualification")).toContain("simulator-flag-mismatch");
+  });
+});
+
+describe("initial policy - disarming after a qualification", () => {
+  it("accepts exactly the disarming change", () => {
+    // The rollback in the runbook runs through this path. Without it the
+    // operator could not disarm through the gated workflow at all.
+    const result = evaluatePlan(disarmPlan(), { mode: "initial" });
+    expect(result.violations).toEqual([]);
+    expect(result.ok).toBe(true);
+    expect(result.counts.update).toBe(1);
+    expect(result.counts.create ?? 0).toBe(0);
+    expect(result.destructive).toBe(0);
+    expect(result.simulatorEnabled).toBe("false");
+    expect(result.simulatorFlagChange).toBe("true -> false");
+  });
+
+  it("refuses an update that is not a real transition", () => {
+    // Already "false" before and after: the update must be for some other
+    // reason, so it is not the change this policy permits.
+    const plan = disarmPlan();
+    const lambda = plan.resource_changes.find(
+      (rc: { address: string }) => rc.address === SIMULATOR_ARMING_ADDRESS,
+    ) as { change: Record<string, unknown> };
+    lambda.change.before = lambdaAttributes();
+    expect(codes(plan, "initial")).toContain("simulator-flag-transition");
+  });
+
+  it("refuses arming through the initial policy", () => {
+    const plan = disarmPlan({
+      environment: [{ variables: { ...LAMBDA_ENV, SIMULATOR_ENABLED: "true" } }],
+    });
+    const lambda = plan.resource_changes.find(
+      (rc: { address: string }) => rc.address === SIMULATOR_ARMING_ADDRESS,
+    ) as { change: Record<string, unknown> };
+    lambda.change.before = lambdaAttributes();
+    const found = codes(plan, "initial");
+    expect(found).toContain("simulator-flag-mismatch");
+  });
+
+  it("refuses disarming that also changes a safety-critical attribute", () => {
+    for (const [attribute, value] of [
+      ["reserved_concurrent_executions", 50],
+      ["role", "arn:aws:iam::000000000000:role/something-else"],
+      ["timeout", 600],
+      ["handler", "index.somethingElse"],
+    ] as [string, unknown][]) {
+      expect(codes(disarmPlan({ [attribute]: value }), "initial")).toContain(
+        "lambda-attribute-change",
+      );
+    }
+  });
+
+  it("refuses disarming that also rewrites another environment variable", () => {
+    const plan = disarmPlan({
+      environment: [
+        {
+          variables: {
+            ...LAMBDA_ENV,
+            SIMULATOR_ENABLED: "false",
+            ALLOWED_LEX_ALIAS_NAMES: "qualification,TestBotAlias",
+          },
+        },
+      ],
+    });
+    expect(codes(plan, "initial")).toContain("lambda-env-change");
+  });
+
+  it("refuses disarming alongside an update to any other resource", () => {
+    const plan = disarmPlan();
+    const flow = plan.resource_changes.find(
+      (rc: { address: string }) => rc.address === "aws_connect_contact_flow.supplier_simulator",
+    ) as { change: Record<string, unknown> };
+    flow.change.actions = ["update"];
+    expect(codes(plan, "initial")).toContain("update-action");
+  });
+
+  it("refuses disarming alongside anything destructive or unexpected", () => {
+    const plan = disarmPlan({}, [change("aws_dynamodb_table.runs", ["create"])]);
+    plan.resource_changes[0].change.actions = ["delete"];
+    const found = codes(plan, "initial");
+    expect(found).toContain("delete-action");
+    expect(found).toContain("forbidden:dynamodb");
+  });
+
+  it("fails closed when the prior SIMULATOR_ENABLED cannot be resolved", () => {
+    const plan = disarmPlan();
+    const lambda = plan.resource_changes.find(
+      (rc: { address: string }) => rc.address === SIMULATOR_ARMING_ADDRESS,
+    ) as { change: Record<string, unknown> };
+    lambda.change.before = lambdaAttributes({ environment: undefined });
+    expect(codes(plan, "initial")).toContain("simulator-flag-unresolved");
+  });
+
+  it("still accepts a plain first deployment, which has nothing to disarm", () => {
+    // Initial mode serves both purposes; adding the disarm path must not make
+    // a create-only plan require an update.
+    expect(evaluatePlan(initialCreatePlan(), { mode: "initial" }).ok).toBe(true);
+  });
+
+  it("refuses a disarming transition under the qualification policy", () => {
+    // Qualification exists only to arm; the reverse direction is not its job.
+    const plan = disarmPlan();
+    plan.variables.simulator_enabled = { value: true };
+    const found = codes(plan, "qualification");
+    expect(found).toContain("simulator-flag-mismatch");
+    expect(found).toContain("simulator-flag-transition");
   });
 });
 

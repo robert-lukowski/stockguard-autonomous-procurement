@@ -86,11 +86,38 @@ describe("post-apply verification is read-only", () => {
       "get-policy", // Lex may invoke the function
       "lexv2.amazonaws.com",
       "describe-contact-flow", // StockGuard flow exists
-      "list-phone-numbers-v2", // no number assignment by Terraform
       "CALL_RECORDINGS", // no recording config when not requested
     ]) {
       expect(script).toContain(probe);
     }
+  });
+
+  it("does not claim to verify the phone number's contact-flow association", () => {
+    // No AWS API exposes it: describe-phone-number returns TargetArn, which
+    // identifies the Connect instance, not the inbound contact flow. Comparing
+    // the two is a check that can never fail - a vacuous PASS that reads as
+    // evidence while proving nothing.
+    // Checked against the parsed AWS invocations, not the raw text: the
+    // explanatory `manual` message legitimately names the API it cannot use.
+    expect(invocations.filter((i) => i.verb.includes("phone-number"))).toEqual([]);
+    expect(executable).not.toContain("TargetArn");
+    expect(executable).not.toMatch(/pass ".*bound to the StockGuard flow/);
+    expect(executable).not.toMatch(/pass ".*phone/i);
+  });
+
+  it("reports the phone-number association as needing a human instead", () => {
+    expect(executable).toMatch(/manual "phone number -> contact flow association cannot be read/);
+    // A MANUAL item is neither a pass nor a failure, and is counted so the
+    // closing summary cannot read as a clean bill of health.
+    expect(executable).toContain("MANUAL_CHECKS=$((MANUAL_CHECKS + 1))");
+    expect(executable).toContain('if [ "$MANUAL_CHECKS" -gt 0 ]');
+    expect(executable).toContain("are NOT verified by this script");
+    // The script still exits 0 on manual items alone; only real failures fail.
+    expect(executable).toContain("Automated checks passed.");
+  });
+
+  it("points at the runbook step that covers the manual check", () => {
+    expect(script).toContain("docs/aws-qualification-post-apply-runbook.md step 3");
   });
 
   it("refuses to run without explicit inputs rather than guessing", () => {
