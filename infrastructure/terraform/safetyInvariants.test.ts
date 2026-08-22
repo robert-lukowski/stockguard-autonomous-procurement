@@ -32,6 +32,14 @@ describe("infrastructure safety invariants", () => {
     );
   });
 
+  it("does not attach a recording configuration on the first deployment", () => {
+    // Attaching CALL_RECORDINGS would replace whatever the Connect instance
+    // already has, and that has not been inspected yet.
+    expect(tf("variables.tf")).toMatch(
+      /variable "enable_call_recording"[\s\S]*?default\s*=\s*false/,
+    );
+  });
+
   it("grants the Lambda role nothing beyond CloudWatch Logs", () => {
     const iam = tf("iam.tf");
     expect(iam).toContain("logs:CreateLogStream");
@@ -119,6 +127,26 @@ describe("infrastructure safety invariants", () => {
 describe("workflow safety invariants", () => {
   const plan = repoFile(".github", "workflows", "terraform-plan.yml");
   const apply = repoFile(".github", "workflows", "terraform-apply.yml");
+  /**
+   * Workflow text with comment lines removed.
+   *
+   * These checks assert what a job actually does, so a comment that merely
+   * mentions `environment:` must not satisfy or break them. Stripping
+   * comments is enough here and avoids pulling in a YAML parser purely for
+   * tests.
+   */
+  const withoutComments = (yaml: string) =>
+    yaml
+      .split("\n")
+      .filter((line) => !/^\s*#/.test(line))
+      .join("\n");
+
+  const planJobBlock = (name: "validate" | "plan") => {
+    const stripped = withoutComments(plan);
+    const start = stripped.indexOf(`\n  ${name}:`);
+    const nextJob = name === "validate" ? stripped.indexOf("\n  plan:") : stripped.length;
+    return stripped.slice(start, nextJob);
+  };
 
   it("never applies from the plan workflow", () => {
     expect(plan).not.toMatch(/terraform\s+apply/);
@@ -144,6 +172,68 @@ describe("workflow safety invariants", () => {
     expect(apply).toMatch(/terraform apply[^\n]*tfplan/);
   });
 
+  it("binds the AWS plan job to the environment the role trust requires", () => {
+    // The deploy role trusts `...:environment:aws-qualification`. A job with
+    // no environment presents a `:ref:` subject instead and cannot assume the
+    // role at all - this split is what makes deployment possible.
+    const planJob = planJobBlock("plan");
+    expect(planJob).toContain("environment:");
+    expect(planJob).toContain("aws-qualification");
+    expect(planJob).toContain("id-token: write");
+  });
+
+  it("keeps the PR-triggered validate job unable to reach AWS", () => {
+    const validateJob = planJobBlock("validate");
+    // No environment, no id-token, no role assumption: a pull request cannot
+    // obtain a deployment credential even by accident.
+    expect(validateJob).not.toContain("environment:");
+    expect(validateJob).not.toContain("id-token");
+    expect(validateJob).not.toContain("configure-aws-credentials");
+    expect(validateJob).toContain("terraform validate");
+  });
+
+  it("runs the AWS plan only on manual dispatch from main", () => {
+    const planJob = planJobBlock("plan");
+    expect(planJob).toContain("github.event_name == 'workflow_dispatch'");
+    expect(planJob).toContain("github.ref == 'refs/heads/main'");
+    expect(planJob).toContain("vars.AWS_DEPLOY_ROLE_ARN != ''");
+  });
+
+  it("declares the backend as a partial config with no committed values", () => {
+    const versions = tf("versions.tf");
+    expect(versions).toContain('backend "s3" {}');
+    // A bucket name or account id here would be committed configuration.
+    expect(versions).not.toMatch(/bucket\s*=\s*"/);
+    expect(versions).not.toMatch(/\b\d{12}\b/);
+  });
+
+  it("initializes the same remote state in both workflows", () => {
+    for (const workflow of [plan, apply]) {
+      expect(workflow).toContain('-backend-config="key=runtime/terraform.tfstate"');
+      expect(workflow).toContain('-backend-config="use_lockfile=true"');
+      expect(workflow).toContain('-backend-config="encrypt=true"');
+      expect(workflow).toContain("secrets.TERRAFORM_STATE_BUCKET");
+    }
+  });
+
+  it("defaults both runtime switches to false on every dispatch path", () => {
+    // Neither a plan nor an apply may arm the supplier or attach a recording
+    // configuration unless an operator consciously flips it.
+    for (const workflow of [plan, apply]) {
+      const inputs = workflow.slice(
+        workflow.indexOf("workflow_dispatch:"),
+        workflow.indexOf("permissions:"),
+      );
+      for (const name of ["simulator_enabled", "enable_call_recording"]) {
+        expect(inputs).toContain(name);
+      }
+      expect(inputs).not.toContain("default: true");
+      // realCallsEnabled is deliberately not exposed anywhere: the CALL-E
+      // caller stays outside AWS.
+      expect(workflow).not.toContain("realCallsEnabled");
+    }
+  });
+
   it("never exposes AWS identifiers as plain job-level variables", () => {
     // Masking is not retroactive. A job-level `vars.*` identifier is already
     // in the environment before any ::add-mask:: could run, so these must be
@@ -165,9 +255,10 @@ describe("workflow safety invariants", () => {
     expect(beforePlan).not.toContain("AWS_CONNECT_INSTANCE_ID");
   });
 
-  it("succeeds with an explicit notice when the deploy role is unconfigured", () => {
+  it("says explicitly why no AWS plan ran when the deploy role is unconfigured", () => {
     expect(plan).toContain("AWS plan skipped");
-    expect(plan).toContain("vars.AWS_DEPLOY_ROLE_ARN == ''");
+    // The plan job is gated off entirely rather than running and reporting.
+    expect(planJobBlock("plan")).toContain("vars.AWS_DEPLOY_ROLE_ARN != ''");
   });
 
   it("uses OIDC rather than static AWS keys", () => {

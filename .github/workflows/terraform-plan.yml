@@ -2,37 +2,56 @@ name: Terraform Plan
 
 run-name: Terraform plan · ${{ github.ref_name }}
 
-# Plan only. This workflow can never apply: there is no apply step, and the
-# apply workflow is a separate file gated behind a protected environment.
+# Two jobs, deliberately separated.
+#
+#   validate — runs on every PR, holds NO environment and NO AWS credential.
+#   plan     — manual only, bound to the aws-qualification environment, which
+#              is what the deploy role's OIDC trust policy actually requires.
+#
+# Splitting them is not cosmetic. The role trusts the subject
+# `...:environment:aws-qualification`; a job without that environment presents
+# a `:ref:` subject instead and AssumeRoleWithWebIdentity fails. Keeping the
+# two apart also means PR-triggered code never has a deployment role at all.
+#
+# Neither job ever applies.
 on:
   pull_request:
     paths:
       - "infrastructure/terraform/**"
       - ".github/workflows/terraform-plan.yml"
   workflow_dispatch:
+    inputs:
+      simulator_enabled:
+        description: 'Arm the synthetic supplier so it answers calls (keep false until the qualification call)'
+        required: false
+        default: false
+        type: boolean
+      enable_call_recording:
+        description: 'Create the recording bucket and attach it to Connect (keep false until an existing CALL_RECORDINGS config is ruled out)'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
-  id-token: write
-  pull-requests: write
 
 concurrency:
   group: terraform-plan-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  plan:
-    name: fmt, validate, plan
+  # ---------------------------------------------------------------------------
+  # JOB 1 — credential-free validation.
+  # ---------------------------------------------------------------------------
+  validate:
+    name: fmt and validate
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 10
+    # No `environment:` and no id-token permission: this job cannot obtain an
+    # AWS credential even by accident.
     env:
       TF_IN_AUTOMATION: "true"
       TF_INPUT: "0"
-      # AWS identifiers are deliberately NOT set at job level. They are
-      # supplied as step-level secrets on the one step that needs them, so
-      # GitHub masks them from first use. Masking is not retroactive: a
-      # job-level variable is already in the environment before any
-      # ::add-mask:: could run.
 
     steps:
       - name: Enforce repository identity
@@ -55,8 +74,8 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
 
-      # The Lambda bundle is gitignored and rebuilt here, so the plan hashes
-      # exactly what this commit produces rather than a stale artifact.
+      # The bundle is gitignored and rebuilt here, so validation covers exactly
+      # what this commit produces rather than a stale artifact.
       - name: Build Lambda bundle
         run: npm run build:lambda
 
@@ -70,37 +89,110 @@ jobs:
         working-directory: infrastructure/terraform
         run: terraform fmt -check -recursive -diff
 
-      # Formatting and syntax are checked without credentials first, so an
-      # obvious mistake fails before any AWS role is assumed.
+      # -backend=false: no bucket, no credential, no state access. The backend
+      # is a partial block, so this is also the only way to init without one.
       - name: Terraform init (no backend)
         working-directory: infrastructure/terraform
         run: terraform init -backend=false
 
-      # The runner CAN reach the provider registry, so it produces the real
-      # lock file. It is uploaded rather than invented: this repository's build
-      # environment cannot reach the registry, and fabricating checksums would
-      # defeat the point of a lock file. Download this artifact and commit it
-      # to pin providers reproducibly.
       - name: Upload generated provider lock file
         uses: actions/upload-artifact@v4
         with:
           name: terraform-provider-lock
           path: infrastructure/terraform/.terraform.lock.hcl
-          # .terraform.lock.hcl is a dotfile, and upload-artifact skips hidden
-          # files by default - without this the upload silently finds nothing.
+          # .terraform.lock.hcl is a dotfile and upload-artifact skips hidden
+          # files by default.
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
 
-      # No AWS inputs here on purpose: `terraform validate` checks the
-      # configuration and does not evaluate variable values, so this stage
-      # runs with no account id, no instance id and no credentials.
+      # `terraform validate` does not evaluate variable values, so this runs
+      # with no account id, no instance id and no credentials.
       - name: Terraform validate
         working-directory: infrastructure/terraform
         run: terraform validate -no-color
 
+      - name: Report AWS plan status
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo '### Terraform validate passed'
+            if [ -z "${DEPLOY_ROLE:-}" ]; then
+              echo ''
+              echo 'AWS plan skipped: AWS_DEPLOY_ROLE_ARN is not configured, so'
+              echo 'no AWS credential was requested and no AWS API call was made.'
+            else
+              echo ''
+              echo 'A deploy role is configured. Run this workflow via'
+              echo 'workflow_dispatch on main to produce an AWS plan.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -z "${DEPLOY_ROLE:-}" ]; then
+            echo "::notice::AWS plan skipped - deployment bootstrap not configured. fmt/init/validate passed."
+          fi
+        env:
+          DEPLOY_ROLE: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+
+  # ---------------------------------------------------------------------------
+  # JOB 2 — the real plan. Manual, main-only, environment-bound.
+  # ---------------------------------------------------------------------------
+  plan:
+    name: plan against AWS
+    needs: validate
+    # Manual dispatch on main only, and only once a deploy role exists. On a
+    # pull request this job is skipped entirely, so PR code never reaches AWS.
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      vars.AWS_DEPLOY_ROLE_ARN != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    # The subject the deploy role's trust policy demands. Without this the
+    # role cannot be assumed at all.
+    environment:
+      name: aws-qualification
+
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "0"
+
+    steps:
+      - name: Enforce repository identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY_ID" = "1341560793"
+          test "$GITHUB_REPOSITORY_OWNER_ID" = "207513888"
+
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Configure Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Build Lambda bundle
+        run: npm run build:lambda
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.14.5"
+          terraform_wrapper: false
+
       - name: Assume deployment role
-        if: vars.AWS_DEPLOY_ROLE_ARN != ''
         uses: aws-actions/configure-aws-credentials@254c19bd240aabef8777f48595e9d2d7b972184b # v6.2.1
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
@@ -111,49 +203,57 @@ jobs:
           mask-aws-account-id: true
           unset-current-credentials: true
 
-      # A refreshing plan needs read access to existing resources. It does NOT
-      # need write access; the deploy role's write permissions are simply
-      # unused here. We do not widen the read-only inventory role for this.
-      # Identifiers enter the job here and nowhere earlier. As secrets they
-      # are masked by GitHub from the moment they are referenced.
-      - name: Terraform init and plan
-        if: vars.AWS_DEPLOY_ROLE_ARN != ''
+      # Harmless smoke test: proves the environment-bound OIDC trust works
+      # before anything reads state. Identity is never printed.
+      - name: Verify assumed identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws sts get-caller-identity --query Arn --output text > /dev/null
+          echo "::notice::OIDC role assumed successfully."
+
+      # Backend values are supplied here, never committed.
+      - name: Terraform init with remote state
+        working-directory: infrastructure/terraform
+        run: |
+          set -euo pipefail
+          terraform init -reconfigure \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="key=runtime/terraform.tfstate" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+        env:
+          TF_STATE_BUCKET: ${{ secrets.TERRAFORM_STATE_BUCKET }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+
+      - name: Terraform plan
         working-directory: infrastructure/terraform
         env:
           TF_VAR_aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
           TF_VAR_connect_instance_id: ${{ secrets.AWS_CONNECT_INSTANCE_ID }}
           TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+          # Both default to false. A plan never arms anything by itself, and
+          # the operator must consciously flip these on dispatch.
+          TF_VAR_simulator_enabled: ${{ inputs.simulator_enabled }}
+          TF_VAR_enable_call_recording: ${{ inputs.enable_call_recording }}
         run: |
           set -euo pipefail
-          terraform init -reconfigure
-          terraform plan -no-color -lock=false -out=tfplan | tee plan.txt
+          terraform plan -no-color -out=tfplan | tee plan.txt
 
       - name: Summarize plan
-        if: vars.AWS_DEPLOY_ROLE_ARN != ''
         shell: bash
         run: |
           set -euo pipefail
           {
             echo '### Terraform plan'
-            echo '```'
-            # Resource counts only. The full plan can echo ARNs and the
-            # contact-flow body, so it stays in the job log, not the summary.
-            grep -E '^(Plan:|No changes)' plan.txt || echo 'see job log'
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      # Desired state until the AWS bootstrap is approved: the job succeeds
-      # having proven fmt, init and validate, and never touches AWS.
-      - name: Report skipped AWS plan
-        if: vars.AWS_DEPLOY_ROLE_ARN == ''
-        shell: bash
-        run: |
-          set -euo pipefail
-          {
-            echo '### AWS plan skipped'
-            echo 'AWS_DEPLOY_ROLE_ARN is not configured, so no AWS credential was'
-            echo 'requested and no AWS API call was made.'
             echo ''
-            echo 'terraform fmt, init and validate ran and passed.'
+            echo "simulator_enabled: \`${{ inputs.simulator_enabled }}\`"
+            echo "enable_call_recording: \`${{ inputs.enable_call_recording }}\`"
+            echo ''
+            echo '```'
+            # Counts only. A full plan echoes ARNs and the contact-flow body,
+            # so it stays in the job log rather than the summary.
+            grep -E '^(Plan:|No changes)' infrastructure/terraform/plan.txt || echo 'see job log'
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          echo "::notice::AWS plan skipped - deployment bootstrap not configured. fmt/init/validate passed."
