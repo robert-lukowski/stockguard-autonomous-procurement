@@ -21,16 +21,14 @@ terraform {
     }
   }
 
-  # Remote state. The bucket is NOT created by this configuration - it is a
-  # one-time manual bootstrap, because Terraform cannot hold its own backend.
-  # Left commented so `terraform init` works locally for fmt/validate before
-  # the bucket exists. Uncomment during the separately approved deployment.
+  # Remote state, declared as a PARTIAL configuration on purpose.
   #
-  # backend "s3" {
-  #   bucket       = "stockguard-tfstate-<account-id>"
-  #   key          = "runtime/terraform.tfstate"
-  #   region       = "eu-central-1"
-  #   encrypt      = true
-  #   use_lockfile = true
-  # }
+  # Bucket, key, region and locking are supplied at `terraform init` time from
+  # GitHub configuration, so no account identifier, bucket name or credential
+  # is ever committed here. `terraform init -backend=false` still works for
+  # credential-free fmt/validate in CI and locally.
+  #
+  # Locking uses native S3 conditional writes (use_lockfile), so there is no
+  # DynamoDB lock table to provision or pay for.
+  backend "s3" {}
 }

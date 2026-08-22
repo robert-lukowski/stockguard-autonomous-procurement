@@ -123,11 +123,34 @@ Resulting order: bot → Lambda → alias → permission.
 | `AWS_REGION` | Variable | not sensitive |
 | `AWS_DEPLOY_ROLE_ARN` | Variable | not sensitive, and its presence is what gates whether the plan job touches AWS at all |
 
-Until `AWS_DEPLOY_ROLE_ARN` is set, the plan workflow runs `fmt`, `init
--backend=false` and `validate`, then finishes successfully with an explicit
-notice that the AWS plan was skipped. No credential is requested and no AWS
-API call is made. That is the intended state before the deployment bootstrap
-is approved.
+`TERRAFORM_STATE_BUCKET` is also a secret, since the bucket name commonly
+embeds the account id.
+
+The plan workflow is split in two. The `validate` job runs on every pull
+request with **no environment and no `id-token` permission**, so PR-triggered
+code cannot obtain a deployment credential at all. The `plan` job is manual,
+`main`-only, and carries `environment: aws-qualification` — the OIDC subject
+the deploy role's trust policy demands. Without that environment the role
+simply cannot be assumed.
+
+Until `AWS_DEPLOY_ROLE_ARN` is set, the `plan` job is skipped and CI proves
+`fmt`, `init -backend=false` and `validate` only, with an explicit notice
+saying why. No credential is requested and no AWS API call is made.
+
+See [the bootstrap runbook](./aws-qualification-bootstrap-runbook.md) for the
+one-time AWS and GitHub setup.
+
+## Remote state
+
+`versions.tf` declares `backend "s3" {}` — a partial configuration. Bucket,
+key, region, encryption and locking are supplied at `terraform init` time from
+GitHub configuration, so no account identifier, bucket name or credential is
+committed. Both workflows initialize the same state object at
+`runtime/terraform.tfstate`.
+
+Locking uses native S3 conditional writes, so there is no DynamoDB lock table.
+
+`terraform init -backend=false` still works for credential-free validation.
 
 ## Provider lock file
 

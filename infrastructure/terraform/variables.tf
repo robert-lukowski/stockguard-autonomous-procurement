@@ -80,14 +80,21 @@ variable "simulator_enabled" {
 
 variable "enable_call_recording" {
   type        = bool
-  default     = true
+  default     = false
   description = <<-EOT
     Create the private recording bucket and attach it to the Connect instance.
 
-    Recording is our best debugging instrument for the first call, and both
-    parties are ours, so it is enabled by default. It is never a decision
-    source: authority stays with the CALL-E structured result, the transcript
-    evidence and the deterministic Policy Gateway.
+    Defaults to FALSE for the first deployment. Attaching a CALL_RECORDINGS
+    storage configuration would replace whatever the Connect instance already
+    has, and that has not yet been inspected. Recording is genuinely useful for
+    debugging the first call, but it is optional and must never disturb an
+    existing configuration or block the core runtime.
+
+    Turn it on only once the instance is confirmed to have no existing
+    CALL_RECORDINGS storage configuration.
+
+    It is never a decision source: authority stays with the CALL-E structured
+    result, the transcript evidence and the deterministic Policy Gateway.
   EOT
 }
 

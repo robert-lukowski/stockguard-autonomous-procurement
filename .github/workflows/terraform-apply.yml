@@ -18,6 +18,16 @@ on:
         description: 'Type APPLY to confirm you intend to change AWS resources'
         required: true
         type: string
+      simulator_enabled:
+        description: 'Arm the synthetic supplier so it answers calls (keep false until the qualification call)'
+        required: false
+        default: false
+        type: boolean
+      enable_call_recording:
+        description: 'Create the recording bucket and attach it to Connect (keep false until an existing CALL_RECORDINGS config is ruled out)'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -45,11 +55,15 @@ jobs:
     env:
       TF_IN_AUTOMATION: "true"
       TF_INPUT: "0"
-      # Secrets, so GitHub masks them from first use, and referenced only by
-      # the Terraform steps below rather than for the whole job.
+      # Secrets, so GitHub masks them from first use.
       TF_VAR_aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
       TF_VAR_connect_instance_id: ${{ secrets.AWS_CONNECT_INSTANCE_ID }}
       TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+      # Both default to false. Arming the simulator or attaching a recording
+      # configuration is always a conscious choice made at dispatch time,
+      # never something an apply does on its own.
+      TF_VAR_simulator_enabled: ${{ inputs.simulator_enabled }}
+      TF_VAR_enable_call_recording: ${{ inputs.enable_call_recording }}
 
     steps:
       - name: Verify explicit confirmation
@@ -109,9 +123,21 @@ jobs:
           mask-aws-account-id: true
           unset-current-credentials: true
 
-      - name: Terraform init
+      # Same partial backend as the plan workflow, so both operate on one
+      # state object. Values come from GitHub configuration, never the repo.
+      - name: Terraform init with remote state
         working-directory: infrastructure/terraform
-        run: terraform init -reconfigure
+        run: |
+          set -euo pipefail
+          terraform init -reconfigure \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="key=runtime/terraform.tfstate" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+        env:
+          TF_STATE_BUCKET: ${{ secrets.TERRAFORM_STATE_BUCKET }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
 
       # A fresh plan is produced immediately before applying, and apply runs
       # that exact saved plan file. Nothing can drift between the two.
