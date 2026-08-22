@@ -1,0 +1,277 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  StockGuard GitHub Actions deployment role. Creates IAM resources only and
+  assumes the account-level GitHub OIDC provider already exists (it does - the
+  read-only inventory role uses it). This template is NOT deployed by CI: it is
+  a one-time manual bootstrap, deliberately separate from the read-only role,
+  which it does not modify.
+
+Parameters:
+  AllowedRegion:
+    Type: String
+    Default: eu-central-1
+    AllowedPattern: "^[a-z]{2}(-gov)?-[a-z]+-[0-9]$"
+    Description: Region containing the existing Amazon Connect sandbox.
+
+  TerraformStateBucket:
+    Type: String
+    AllowedPattern: "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$"
+    Description: Existing S3 bucket holding Terraform remote state.
+
+Resources:
+  StockGuardGitHubDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: stockguard-github-deploy
+      Description: Least-privilege Terraform deployment role for StockGuard runtime resources.
+      # Short sessions: a leaked token is useful for an hour at most.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # Same immutable subject form as the read-only role: this repository
+          # by numeric id, this owner by numeric id, and the protected
+          # deployment environment only. Renaming the repo or the owner breaks
+          # the trust rather than silently widening it.
+          - Sid: GitHubOidcFromProtectedEnvironmentOnly
+            Effect: Allow
+            Principal:
+              Federated: !Sub >-
+                arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: >-
+                  repo:robert-lukowski@207513888/stockguard-autonomous-procurement@1341560793:environment:aws-qualification
+
+      Policies:
+        - PolicyName: stockguard-terraform-state
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadWriteOwnStateObject
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${TerraformStateBucket}/runtime/*"
+              - Sid: ListStateBucket
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetBucketVersioning
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${TerraformStateBucket}"
+
+        - PolicyName: stockguard-runtime-deploy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # --- Lambda: scoped by name prefix -------------------------
+              - Sid: ManageStockGuardLambda
+                Effect: Allow
+                Action:
+                  - lambda:CreateFunction
+                  - lambda:DeleteFunction
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                  - lambda:ListVersionsByFunction
+                  - lambda:UpdateFunctionCode
+                  - lambda:UpdateFunctionConfiguration
+                  - lambda:PutFunctionConcurrency
+                  - lambda:DeleteFunctionConcurrency
+                  - lambda:AddPermission
+                  - lambda:RemovePermission
+                  - lambda:GetPolicy
+                  - lambda:TagResource
+                  - lambda:UntagResource
+                  - lambda:ListTags
+                Resource: !Sub "arn:${AWS::Partition}:lambda:${AllowedRegion}:${AWS::AccountId}:function:stockguard-*"
+
+              # --- IAM: scoped by role name prefix -----------------------
+              - Sid: ManageStockGuardRoles
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:ListRoleTags
+                  - iam:PutRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:ListAttachedRolePolicies
+                  - iam:UpdateAssumeRolePolicy
+                Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/stockguard-*"
+
+              - Sid: PassOnlyStockGuardRolesToTheirOwnServices
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/stockguard-*"
+                Condition:
+                  StringEquals:
+                    iam:PassedToService:
+                      - lambda.amazonaws.com
+                      - lexv2.amazonaws.com
+
+              # --- CloudWatch Logs: scoped by log group prefix -----------
+              - Sid: ManageStockGuardLogGroups
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:DeleteLogGroup
+                  - logs:PutRetentionPolicy
+                  - logs:DeleteRetentionPolicy
+                  - logs:TagResource
+                  - logs:UntagResource
+                  - logs:ListTagsForResource
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AllowedRegion}:${AWS::AccountId}:log-group:/aws/lambda/stockguard-*"
+
+              - Sid: DescribeLogGroupsForRefresh
+                Effect: Allow
+                Action: logs:DescribeLogGroups
+                # WILDCARD JUSTIFICATION: DescribeLogGroups is a list operation
+                # that AWS does not evaluate against a specific log-group ARN.
+                # It is read-only and cannot mutate anything.
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref AllowedRegion
+
+              # --- Lex V2 -------------------------------------------------
+              - Sid: ManageLexV2Bots
+                Effect: Allow
+                Action:
+                  - lex:CreateBot
+                  - lex:UpdateBot
+                  - lex:DeleteBot
+                  - lex:DescribeBot
+                  - lex:CreateBotLocale
+                  - lex:UpdateBotLocale
+                  - lex:DeleteBotLocale
+                  - lex:DescribeBotLocale
+                  - lex:BuildBotLocale
+                  - lex:CreateIntent
+                  - lex:UpdateIntent
+                  - lex:DeleteIntent
+                  - lex:DescribeIntent
+                  - lex:CreateBotVersion
+                  - lex:DeleteBotVersion
+                  - lex:DescribeBotVersion
+                  - lex:CreateBotAlias
+                  - lex:UpdateBotAlias
+                  - lex:DeleteBotAlias
+                  - lex:DescribeBotAlias
+                  - lex:TagResource
+                  - lex:UntagResource
+                  - lex:ListTagsForResource
+                # WILDCARD JUSTIFICATION: a bot's ARN contains an
+                # AWS-generated id that does not exist before CreateBot
+                # returns, so Create* cannot be scoped to it. Constrained to
+                # the single region instead. Narrowing further is not possible
+                # without pre-creating bots out of band.
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:lex:${AllowedRegion}:${AWS::AccountId}:bot/*"
+                  - !Sub "arn:${AWS::Partition}:lex:${AllowedRegion}:${AWS::AccountId}:bot-alias/*"
+
+              - Sid: ListLexV2Resources
+                Effect: Allow
+                Action:
+                  - lex:ListBots
+                  - lex:ListBotLocales
+                  - lex:ListIntents
+                  - lex:ListBotVersions
+                  - lex:ListBotAliases
+                # WILDCARD JUSTIFICATION: List operations are not
+                # resource-scopable in Lex V2. Read-only.
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref AllowedRegion
+
+              # --- Amazon Connect: scoped to the one existing instance ----
+              - Sid: ManageStockGuardContactFlows
+                Effect: Allow
+                Action:
+                  - connect:CreateContactFlow
+                  - connect:UpdateContactFlowContent
+                  - connect:UpdateContactFlowMetadata
+                  - connect:UpdateContactFlowName
+                  - connect:DeleteContactFlow
+                  - connect:DescribeContactFlow
+                  - connect:TagResource
+                  - connect:UntagResource
+                  - connect:AssociateInstanceStorageConfig
+                  - connect:DisassociateInstanceStorageConfig
+                  - connect:UpdateInstanceStorageConfig
+                  - connect:DescribeInstanceStorageConfig
+                  - connect:ListInstanceStorageConfigs
+                  - connect:AssociateBot
+                  - connect:DisassociateBot
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:connect:${AllowedRegion}:${AWS::AccountId}:instance/*"
+                  - !Sub "arn:${AWS::Partition}:connect:${AllowedRegion}:${AWS::AccountId}:instance/*/contact-flow/*"
+
+              - Sid: ListContactFlowsForRefresh
+                Effect: Allow
+                Action:
+                  - connect:ListContactFlows
+                  - connect:ListInstances
+                  - connect:ListBots
+                # WILDCARD JUSTIFICATION: instance-level list operations that
+                # Connect does not evaluate per-resource. Read-only.
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref AllowedRegion
+
+              # --- S3 recordings bucket: scoped by name prefix ------------
+              - Sid: ManageRecordingBucket
+                Effect: Allow
+                Action:
+                  - s3:CreateBucket
+                  - s3:DeleteBucket
+                  - s3:PutBucketPolicy
+                  - s3:GetBucketPolicy
+                  - s3:DeleteBucketPolicy
+                  - s3:PutBucketPublicAccessBlock
+                  - s3:GetBucketPublicAccessBlock
+                  - s3:PutBucketVersioning
+                  - s3:GetBucketVersioning
+                  - s3:PutEncryptionConfiguration
+                  - s3:GetEncryptionConfiguration
+                  - s3:PutLifecycleConfiguration
+                  - s3:GetLifecycleConfiguration
+                  - s3:GetBucketAcl
+                  - s3:GetBucketLocation
+                  - s3:GetBucketTagging
+                  - s3:PutBucketTagging
+                Resource: !Sub "arn:${AWS::Partition}:s3:::stockguard-*-call-recordings-*"
+
+      Tags:
+        - Key: Project
+          Value: stockguard-autonomous-procurement
+        - Key: Environment
+          Value: hackathon-sandbox
+        - Key: Access
+          Value: deploy
+
+Outputs:
+  DeployRoleArn:
+    Description: Store as the GitHub Actions variable AWS_DEPLOY_ROLE_ARN.
+    Value: !GetAtt StockGuardGitHubDeployRole.Arn
+  ImmutableGitHubSubject:
+    Description: >-
+      Exact immutable GitHub OIDC subject allowed to assume this role. Note it
+      is bound to the protected environment, not to a branch, so a workflow run
+      must pass environment approval before any credential is issued.
+    Value: >-
+      repo:robert-lukowski@207513888/stockguard-autonomous-procurement@1341560793:environment:aws-qualification
+  NotDeployedByCI:
+    Description: Reminder that this template is a manual one-time bootstrap.
+    Value: "Deploy manually. CI never creates or updates this role."

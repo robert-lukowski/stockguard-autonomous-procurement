@@ -8,6 +8,7 @@ export {
   syntheticSupplierProfiles,
 } from "./profiles";
 export { createSupplierSimulatorLexHandler } from "./lexV2";
+export { callELocaleFor } from "./types";
 export type {
   LexV2Event,
   LexV2Response,

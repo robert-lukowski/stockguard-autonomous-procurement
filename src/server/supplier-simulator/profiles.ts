@@ -31,6 +31,28 @@ export const syntheticSupplierProfiles: Record<
     state: "LATE_DELIVERY",
     datasetVersion: "synthetic-suppliers-2026-08-v1",
   },
+  /*
+   * English persona for the first live qualification.
+   *
+   * CHANGED_PAYMENT_TERMS is chosen deliberately: it drives
+   * `commercial_terms_unchanged` to REQUIRES_HUMAN in the Policy Gateway, so
+   * a successful call can never accidentally produce a compliant offer and
+   * create a synthetic purchase order. The qualification proves the telephony
+   * and evidence path, not an autonomous purchase.
+   *
+   * Nationality is a scenario attribute only. Every persona is reached on the
+   * same controlled +1 Connect number.
+   */
+  EN_SUPPLIER: {
+    profileId: "EN_SUPPLIER",
+    supplierId: "supplier-en-01",
+    supplierName: "Ridgeline Industrial Supply",
+    locale: "en_US",
+    currency: "EUR",
+    baseUnitPrice: 41,
+    state: "CHANGED_PAYMENT_TERMS",
+    datasetVersion: "synthetic-suppliers-2026-08-v1",
+  },
   PL_SUPPLIER: {
     profileId: "PL_SUPPLIER",
     supplierId: "supplier-pl-01",

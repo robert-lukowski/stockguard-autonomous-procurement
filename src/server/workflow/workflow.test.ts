@@ -290,7 +290,8 @@ describe("ProcurementWorkflow", () => {
       () => new Date("2026-08-21T09:42:00Z"),
       undefined,
       new InMemoryWorkflowRunStore(),
-      { maximumAttempts: 1, maximumPolls: 2, timeoutMs: 50 },
+      { maximumAttempts: 1, maximumPolls: 2, timeoutMs: 50, pollIntervalMs: 0, initialPollDelayMs: 0 },
+      async () => {},
     );
 
     const result = await workflow.run(
@@ -344,7 +345,8 @@ describe("ProcurementWorkflow", () => {
       () => new Date("2026-08-21T09:42:00Z"),
       undefined,
       new InMemoryWorkflowRunStore(),
-      { maximumAttempts: 2, maximumPolls: 1, timeoutMs: 50 },
+      { maximumAttempts: 2, maximumPolls: 1, timeoutMs: 50, pollIntervalMs: 0, initialPollDelayMs: 0 },
+      async () => {},
     );
 
     const result = await workflow.run(

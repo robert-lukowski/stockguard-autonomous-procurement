@@ -1,0 +1,134 @@
+name: Terraform Apply
+
+run-name: Terraform APPLY · requested by ${{ github.actor }}
+
+# ---------------------------------------------------------------------------
+# THIS WORKFLOW HAS NEVER BEEN RUN.
+#
+# It exists so that a future deployment is reviewable as code rather than
+# improvised. Every automatic trigger is deliberately absent: there is no
+# push, no pull_request and no schedule. The only way to start it is a human
+# choosing workflow_dispatch on main, and then a second human approving the
+# protected environment.
+# ---------------------------------------------------------------------------
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type APPLY to confirm you intend to change AWS resources'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+# Never two applies at once, and never cancel one midway: a half-applied
+# Terraform run is worse than a slow one.
+concurrency:
+  group: terraform-apply
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    name: Apply reviewed plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    # Requires a reviewer configured on the environment. The deploy role's
+    # trust policy is bound to this environment's OIDC subject, so without
+    # approval no AWS credential can be issued at all - the gate is enforced
+    # by IAM, not only by GitHub.
+    environment:
+      name: aws-qualification
+
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "0"
+      # Secrets, so GitHub masks them from first use, and referenced only by
+      # the Terraform steps below rather than for the whole job.
+      TF_VAR_aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+      TF_VAR_connect_instance_id: ${{ secrets.AWS_CONNECT_INSTANCE_ID }}
+      TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+
+    steps:
+      - name: Verify explicit confirmation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ inputs.confirm }}" = "APPLY" || {
+            echo "::error::Confirmation input must be exactly APPLY"
+            exit 1
+          }
+
+      - name: Enforce main branch and repository identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_REPOSITORY_ID" = "1341560793"
+          test "$GITHUB_REPOSITORY_OWNER_ID" = "207513888"
+
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Configure Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Verify the code that is about to be deployed
+        run: |
+          set -euo pipefail
+          npm run lint
+          npm test
+
+      - name: Build Lambda bundle
+        run: npm run build:lambda
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.14.5"
+          terraform_wrapper: false
+
+      - name: Assume deployment role
+        uses: aws-actions/configure-aws-credentials@254c19bd240aabef8777f48595e9d2d7b972184b # v6.2.1
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: stockguard-apply-${{ github.run_id }}
+          role-duration-seconds: 1800
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ secrets.AWS_ACCOUNT_ID }}
+          mask-aws-account-id: true
+          unset-current-credentials: true
+
+      - name: Terraform init
+        working-directory: infrastructure/terraform
+        run: terraform init -reconfigure
+
+      # A fresh plan is produced immediately before applying, and apply runs
+      # that exact saved plan file. Nothing can drift between the two.
+      - name: Terraform plan
+        working-directory: infrastructure/terraform
+        run: terraform plan -no-color -out=tfplan
+
+      - name: Terraform apply the saved plan
+        working-directory: infrastructure/terraform
+        run: terraform apply -no-color -auto-approve tfplan
+
+      - name: Remaining manual steps
+        shell: bash
+        run: |
+          {
+            echo '### Still required, manually'
+            echo '1. `aws connect associate-bot --lex-v2-bot ...` (see the terraform output; provider gap #30869)'
+            echo '2. Assign the existing +1 number to the new contact flow in the Connect console'
+            echo '3. Set `simulator_enabled = true` only immediately before a controlled qualification call'
+          } >> "$GITHUB_STEP_SUMMARY"
