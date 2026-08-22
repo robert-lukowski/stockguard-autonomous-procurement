@@ -234,6 +234,149 @@ export function readSimulatorFlagFrom(side, unknownSide) {
   return { state: "known", value: String(raw) };
 }
 
+/**
+ * Normalise a configuration reference to the thing it identifies.
+ *
+ *   "aws_lexv2models_bot.supplier_simulator.id" -> "aws_lexv2models_bot.supplier_simulator"
+ *   "aws_lexv2models_bot.supplier_simulator"    -> unchanged (Terraform emits both)
+ *   "var.simulator_enabled"                     -> unchanged
+ *   "local.lex_alias_name"                      -> unchanged
+ */
+export function normalizeReference(reference) {
+  const parts = String(reference).split(".");
+  if (parts[0] === "var" || parts[0] === "local" || parts[0] === "module") {
+    return parts.slice(0, 2).join(".");
+  }
+  if (parts[0] === "data") return parts.slice(0, 3).join(".");
+  return parts.slice(0, 2).join(".");
+}
+
+/**
+ * Find a `variables` node holding a references array inside an environment
+ * expression, whatever container Terraform wrapped it in.
+ * @returns {string[] | null}
+ */
+function findVariablesReferences(node, depth) {
+  if (depth <= 0 || node === null || typeof node !== "object") return null;
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      const hit = findVariablesReferences(item, depth - 1);
+      if (hit !== null) return hit;
+    }
+    return null;
+  }
+  const variables = node.variables;
+  if (variables && typeof variables === "object" && Array.isArray(variables.references)) {
+    return variables.references;
+  }
+  for (const value of Object.values(node)) {
+    const hit = findVariablesReferences(value, depth - 1);
+    if (hit !== null) return hit;
+  }
+  return null;
+}
+
+/**
+ * The references Terraform records for the simulator Lambda's environment
+ * variables expression, read out of the plan's own `configuration` section.
+ *
+ * IMPORTANT, and verified against Terraform 1.14.5 rather than assumed:
+ * Terraform collapses an object-constructor expression into ONE references
+ * array for the whole map. There is no per-key reference data, so it is not
+ * possible to prove from a plan that SIMULATOR_ENABLED specifically, as
+ * opposed to the map as a whole, references var.simulator_enabled. What can
+ * be proved is that the map still references var.simulator_enabled and that
+ * every other thing it references is part of the reviewed configuration.
+ *
+ * @returns {{ state: string, references: string[] }}
+ */
+export function readEnvironmentReferences(plan, address) {
+  const resources = plan?.configuration?.root_module?.resources;
+  if (!Array.isArray(resources)) return { state: "no-configuration-section", references: [] };
+  const entry = resources.find((r) => r?.address === address);
+  if (!entry) return { state: "resource-absent-from-configuration", references: [] };
+  const environment = entry?.expressions?.environment;
+  if (environment === undefined || environment === null) {
+    return { state: "no-environment-variables-expression", references: [] };
+  }
+
+  // Terraform documents a nested block as an ARRAY of block representations,
+  // so the expected shape is environment[0].variables.references. That was not
+  // directly observable here without running a plan against AWS, so rather
+  // than betting on one encoding this searches the environment expression for
+  // a `variables` node carrying a references array, at any depth, and fails
+  // closed with a named state if there is none. Depth is bounded so a
+  // malformed document cannot spin.
+  const found = findVariablesReferences(environment, 6);
+  if (found === null) return { state: "no-references-recorded", references: [] };
+  return { state: "found", references: found.map(String) };
+}
+
+/**
+ * Last-resort resolution of SIMULATOR_ENABLED when the planned value itself is
+ * opaque.
+ *
+ * On a CREATE the aws provider reports the whole environment variables map as
+ * unknown, because ALLOWED_LEX_BOT_IDS references a bot that does not exist
+ * yet. The flag is genuinely knowable, just not readable from `after`.
+ *
+ * This does NOT assume "false". It requires two further facts, both read out
+ * of the same plan document:
+ *
+ *   a) the declared input, plan.variables.simulator_enabled.value, is a
+ *      boolean and already matches what this policy mode demands, and
+ *   b) the plan's configuration still wires the map to var.simulator_enabled,
+ *      and references nothing beyond that variable, other input variables,
+ *      locals, and resources inside the Architecture A set.
+ *
+ * Anything missing, ambiguous or rewired keeps failing closed.
+ *
+ * @returns {{ ok: true, value: string, references: string[] } | { ok: false, reason: string }}
+ */
+export function resolveSimulatorFlagFromConfiguration(plan, mode, expectedValue) {
+  const declared = plan?.variables?.simulator_enabled?.value;
+  if (typeof declared !== "boolean") {
+    return {
+      ok: false,
+      reason: `plan.variables.simulator_enabled.value is ${JSON.stringify(declared)}, not a boolean, so the declared input cannot corroborate it`,
+    };
+  }
+  if (String(declared) !== expectedValue) {
+    return {
+      ok: false,
+      reason: `the declared input simulator_enabled=${declared} does not match the "${expectedValue}" the ${mode} policy requires`,
+    };
+  }
+
+  const { state, references } = readEnvironmentReferences(plan, SIMULATOR_ARMING_ADDRESS);
+  if (state !== "found") {
+    return { ok: false, reason: `the plan's configuration does not expose the environment variables expression (${state})` };
+  }
+
+  const normalized = [...new Set(references.map(normalizeReference))];
+  if (!normalized.includes("var.simulator_enabled")) {
+    return {
+      ok: false,
+      reason: `the environment variables expression no longer references var.simulator_enabled (it references: ${normalized.join(", ") || "nothing"})`,
+    };
+  }
+
+  const foreign = normalized.filter(
+    (reference) =>
+      !reference.startsWith("var.") &&
+      !reference.startsWith("local.") &&
+      !ARCHITECTURE_A_RESOURCES.includes(reference),
+  );
+  if (foreign.length > 0) {
+    return {
+      ok: false,
+      reason: `the environment variables expression references something outside the reviewed configuration: ${foreign.join(", ")}`,
+    };
+  }
+
+  return { ok: true, value: expectedValue, references: normalized };
+}
+
 function envVariables(side) {
   const vars = unwrapBlock(side?.environment)?.variables;
   return vars && typeof vars === "object" ? vars : {};
@@ -307,6 +450,7 @@ export function evaluatePlan(plan, { mode }) {
   let lambdaCodeChanged = false;
   let flagUpdates = 0;
   let flagChange = null;
+  let flagSource = "planned value";
 
   // --- 1. Input variables. Known before any resource is inspected. ----------
   const declaredSimulator = plan.variables?.simulator_enabled?.value;
@@ -415,14 +559,33 @@ export function evaluatePlan(plan, { mode }) {
       const after = rc.change?.after ?? {};
       const before = rc.change?.before ?? {};
 
-      const flag = readSimulatorFlag(rc.change);
-      simulatorFlag = flag;
+      const planned = readSimulatorFlag(rc.change);
       const wanted = flagTransition.to;
+
+      // On a create the aws provider reports the whole environment variables
+      // map as unknown, because ALLOWED_LEX_BOT_IDS references a bot that does
+      // not exist yet. Corroborate from the declared input and the plan's own
+      // configuration rather than assuming a value - and only on a create.
+      // On an update the values are concrete, so the arming and disarming
+      // transition checks must keep reading the real planned value.
+      let flag = planned;
+      let fallbackReason = null;
+      if (planned.state !== "known" && action === "create") {
+        const corroborated = resolveSimulatorFlagFromConfiguration(plan, mode, wanted);
+        if (corroborated.ok) {
+          flag = { state: "known", value: corroborated.value };
+          flagSource = "declared input + configuration";
+        } else {
+          fallbackReason = corroborated.reason;
+        }
+      }
+      simulatorFlag = flag;
+
       if (flag.state !== "known") {
         add(
           "simulator-flag-unresolved",
           address,
-          `SIMULATOR_ENABLED is ${flag.state} in the plan. It derives from a plain input variable and must be known at plan time, so this fails closed rather than being assumed to be "${wanted}".`,
+          `SIMULATOR_ENABLED is ${planned.state} in the plan${action === "create" ? `, and it could not be corroborated: ${fallbackReason}` : ""}. This fails closed rather than being assumed to be "${wanted}".`,
         );
       } else if (flag.value !== wanted) {
         add(
@@ -503,6 +666,7 @@ export function evaluatePlan(plan, { mode }) {
     declaredSimulator,
     declaredRecording,
     flagChange,
+    flagSource,
   });
 }
 
@@ -528,6 +692,7 @@ function finish(plan, mode, violations, simulatorFlag, extra) {
     declaredCallRecording: extra.declaredRecording ?? null,
     lambdaCodeChanged: Boolean(extra.lambdaCodeChanged),
     simulatorFlagChange: extra.flagChange ?? null,
+    simulatorFlagSource: extra.flagSource ?? "planned value",
     recordingResourcesPresent: violations.some(
       (v) => v.code === "forbidden:recording-storage" || v.code === "forbidden:connect-storage-config",
     ),
@@ -558,6 +723,7 @@ export function formatReport(result) {
     `  delete / replace             ${result.destructive}`,
     `  simulator armed              ${result.simulatorEnabled === "true" ? "yes" : result.simulatorEnabled === "false" ? "no" : `undetermined (${result.simulatorEnabled})`}`,
     `  recording resources present  ${yesNo(result.recordingResourcesPresent)}`,
+    `  simulator flag read from     ${result.simulatorFlagSource}`,
   ];
   if (result.simulatorFlagChange) {
     lines.push(`  SIMULATOR_ENABLED change     ${result.simulatorFlagChange}`);

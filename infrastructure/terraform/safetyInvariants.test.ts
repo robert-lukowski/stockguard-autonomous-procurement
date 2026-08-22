@@ -2,6 +2,11 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import {
+  SIMULATOR_ARMING_ADDRESS,
+  // @ts-expect-error - plain .mjs module, deliberately dependency-free
+} from "../../scripts/terraform/assertQualificationPlan.mjs";
+
 /**
  * Static safety invariants for the infrastructure.
  *
@@ -121,6 +126,170 @@ describe("infrastructure safety invariants", () => {
     expect(allTf).not.toContain("resource \"aws_dynamodb_table\"");
     expect(allTf).not.toContain("resource \"aws_secretsmanager_secret\"");
     expect(allTf).not.toContain("resource \"aws_kms_key\"");
+  });
+});
+
+/**
+ * Source-level invariant binding SIMULATOR_ENABLED to var.simulator_enabled.
+ *
+ * WHY THIS EXISTS SEPARATELY FROM THE PLAN GATE
+ *
+ * The plan-level check in scripts/terraform/assertQualificationPlan.mjs can
+ * only corroborate at map granularity. Terraform collapses an
+ * object-constructor expression into a single `references` array for the whole
+ * map, so a plan cannot express which KEY references which variable. That
+ * leaves one hole the plan can never close: SIMULATOR_ENABLED could be rewired
+ * to a different variable while var.simulator_enabled stays referenced
+ * elsewhere in the same map, and every plan-level check would still pass.
+ *
+ * The configuration source can express it, so the invariant lives here. The
+ * plan gate remains the runtime check on what is about to be applied; this is
+ * the compile-time check on what the configuration says.
+ */
+describe("simulator flag is wired to exactly one input variable", () => {
+  const EXPECTED_EXPRESSION = "tostring(var.simulator_enabled)";
+
+  /**
+   * Body of the brace-delimited block whose opening brace is at `open`.
+   * `${...}` interpolations are brace-balanced, so plain counting is safe.
+   */
+  function braceBlock(source: string, open: number): string {
+    let depth = 0;
+    for (let i = open; i < source.length; i += 1) {
+      if (source[i] === "{") depth += 1;
+      else if (source[i] === "}") {
+        depth -= 1;
+        if (depth === 0) return source.slice(open + 1, i);
+      }
+    }
+    return "";
+  }
+
+  function nestedBlock(source: string, header: RegExp): string {
+    const match = header.exec(source);
+    if (!match) return "";
+    return braceBlock(source, match.index + match[0].length - 1);
+  }
+
+  /** The simulator Lambda's `environment { variables = { ... } }` body. */
+  function environmentVariables(hcl: string): string {
+    const resource = nestedBlock(
+      hcl,
+      /resource\s+"aws_lambda_function"\s+"supplier_simulator"\s*\{/,
+    );
+    const environment = nestedBlock(resource, /environment\s*\{/);
+    return nestedBlock(environment, /variables\s*=\s*\{/);
+  }
+
+  /** Every right-hand side assigned to SIMULATOR_ENABLED in that block. */
+  function simulatorEnabledAssignments(hcl: string): string[] {
+    return environmentVariables(hcl)
+      .split("\n")
+      .map((line) => line.replace(/#.*$/, "").trim())
+      .filter((line) => /^SIMULATOR_ENABLED\s*=/.test(line))
+      .map((line) => line.replace(/^SIMULATOR_ENABLED\s*=\s*/, "").trim());
+  }
+
+  /** A minimal stand-in used to prove the invariant actually bites. */
+  function syntheticLambda(variables: string): string {
+    return `resource "aws_lambda_function" "supplier_simulator" {
+  function_name = "\${local.name_prefix}-supplier-simulator"
+
+  environment {
+    variables = {
+${variables}
+    }
+  }
+}
+`;
+  }
+
+  it("reads the real configuration, not an empty string", () => {
+    // Guards against the extractor silently returning "" and every assertion
+    // below passing vacuously.
+    const block = environmentVariables(tf("lambda.tf"));
+    expect(block).toContain("ALLOWED_LEX_BOT_IDS");
+    expect(block).toContain("QUALIFICATION_SKU");
+  });
+
+  it("assigns SIMULATOR_ENABLED exactly once, from exactly var.simulator_enabled", () => {
+    expect(simulatorEnabledAssignments(tf("lambda.tf"))).toEqual([EXPECTED_EXPRESSION]);
+  });
+
+  it("guards the same resource the plan gate guards", () => {
+    // If the Lambda were renamed, the plan gate would watch one address while
+    // this invariant checked another.
+    expect(SIMULATOR_ARMING_ADDRESS).toBe("aws_lambda_function.supplier_simulator");
+    expect(tf("lambda.tf")).toContain('resource "aws_lambda_function" "supplier_simulator"');
+  });
+
+  it.each([
+    [
+      "the key is removed",
+      `      ALLOWED_LEX_LOCALES = local.lex_locale_id`,
+    ],
+    [
+      "it is rewired to another variable",
+      `      SIMULATOR_ENABLED = tostring(var.other_flag)`,
+    ],
+    [
+      "it is rewired to a similarly named variable",
+      `      SIMULATOR_ENABLED = tostring(var.simulator_enabled_v2)`,
+    ],
+    [
+      "it is rewired to a local",
+      `      SIMULATOR_ENABLED = tostring(local.simulator_enabled)`,
+    ],
+    [
+      "it is rewired to a resource attribute",
+      `      SIMULATOR_ENABLED = tostring(aws_lexv2models_bot.supplier_simulator.id)`,
+    ],
+    [
+      "a conditional changes the data source",
+      `      SIMULATOR_ENABLED = var.simulator_enabled ? "true" : "false"`,
+    ],
+    [
+      "a wrapper changes the data source",
+      `      SIMULATOR_ENABLED = tostring(var.simulator_enabled && var.armed)`,
+    ],
+    [
+      "the value is coerced through another expression",
+      `      SIMULATOR_ENABLED = lower(tostring(var.simulator_enabled))`,
+    ],
+    [
+      "a second assignment appears",
+      `      SIMULATOR_ENABLED = tostring(var.simulator_enabled)
+      SIMULATOR_ENABLED = "true"`,
+    ],
+    [
+      // The exact hole the plan gate cannot close: the map still references
+      // var.simulator_enabled, so every plan-level check passes, but the key
+      // itself is driven by something else.
+      "the key is rewired while the map still references var.simulator_enabled",
+      `      SIMULATOR_ENABLED = tostring(var.other_flag)
+      AUDIT_ECHO        = tostring(var.simulator_enabled)`,
+    ],
+  ])("fails when %s", (_label, variables) => {
+    expect(simulatorEnabledAssignments(syntheticLambda(variables))).not.toEqual([
+      EXPECTED_EXPRESSION,
+    ]);
+  });
+
+  it("accepts the real expression when it is present in a synthetic file", () => {
+    // Proves the negative cases above fail for the right reason: this same
+    // matcher passes on the correct wiring.
+    expect(
+      simulatorEnabledAssignments(
+        syntheticLambda(`      SIMULATOR_ENABLED = tostring(var.simulator_enabled)`),
+      ),
+    ).toEqual([EXPECTED_EXPRESSION]);
+  });
+
+  it("is not fooled by the key appearing outside the environment block", () => {
+    const decoy = `variable "SIMULATOR_ENABLED" {}
+# SIMULATOR_ENABLED = tostring(var.other_flag)
+${syntheticLambda(`      SIMULATOR_ENABLED = tostring(var.simulator_enabled)`)}`;
+    expect(simulatorEnabledAssignments(decoy)).toEqual([EXPECTED_EXPRESSION]);
   });
 });
 

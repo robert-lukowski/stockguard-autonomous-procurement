@@ -9,6 +9,8 @@ import {
   evaluatePlan,
   formatReport,
   readSimulatorFlag,
+  normalizeReference,
+  readEnvironmentReferences,
   // @ts-expect-error - plain .mjs module, deliberately dependency-free
 } from "./assertQualificationPlan.mjs";
 
@@ -128,6 +130,12 @@ function disarmPlan(overrides: Record<string, unknown> = {}, extra: unknown[] = 
       ...extra,
     ],
   };
+}
+
+function details(plan: unknown, mode: string): string {
+  return evaluatePlan(plan, { mode })
+    .violations.map((v: { detail: string }) => v.detail)
+    .join("\n");
 }
 
 function codes(plan: unknown, mode: string): string[] {
@@ -661,6 +669,211 @@ describe("initial policy - disarming after a qualification", () => {
     const found = codes(plan, "qualification");
     expect(found).toContain("simulator-flag-mismatch");
     expect(found).toContain("simulator-flag-transition");
+  });
+});
+
+describe("the unknown-environment shape a real create plan produces", () => {
+  /**
+   * Captured from Terraform 1.14.5 + hashicorp/aws on run 32573490266, the
+   * first real plan against AWS. On a create the provider reports the WHOLE
+   * environment variables map as unknown, because ALLOWED_LEX_BOT_IDS
+   * references a bot that does not exist yet - there is no per-key marking to
+   * read. The earlier fixtures assumed per-key marking, which is exactly why
+   * the suite passed while the real plan was refused.
+   */
+  const REAL_REFERENCES = [
+    "var.simulator_enabled",
+    "aws_lexv2models_bot.supplier_simulator.id",
+    "aws_lexv2models_bot.supplier_simulator",
+    "local.lex_alias_name",
+    "local.lex_locale_id",
+    "var.qualification_sku",
+    "var.qualification_quantity",
+    "var.qualification_required_by",
+  ];
+
+  function configurationSection(references: string[] | null, address = SIMULATOR_ARMING_ADDRESS) {
+    return {
+      root_module: {
+        resources: [
+          {
+            address,
+            mode: "managed",
+            type: "aws_lambda_function",
+            name: "supplier_simulator",
+            expressions:
+              references === null
+                ? { function_name: { constant_value: "x" } }
+                : {
+                    function_name: { constant_value: "x" },
+                    // Terraform collapses the whole object constructor into a
+                    // single references array; there is no per-key data.
+                    environment: [{ variables: { references } }],
+                  },
+          },
+        ],
+      },
+    };
+  }
+
+  function realCreatePlan(options: {
+    declared?: unknown;
+    references?: string[] | null;
+    configuration?: unknown;
+    address?: string;
+  } = {}) {
+    const plan = initialCreatePlan() as Record<string, unknown>;
+    const lambda = (plan.resource_changes as { address: string; change: Record<string, unknown> }[]).find(
+      (rc) => rc.address === SIMULATOR_ARMING_ADDRESS,
+    )!;
+    // The observed shape: variables present but null, marked wholly unknown.
+    (lambda.change.after as Record<string, unknown>).environment = [{ variables: null }];
+    lambda.change.after_unknown = { environment: [{ variables: true }] };
+
+    (plan.variables as Record<string, unknown>).simulator_enabled = {
+      value: "declared" in options ? options.declared : false,
+    };
+    plan.configuration =
+      "configuration" in options
+        ? options.configuration
+        : configurationSection(
+            options.references === undefined ? REAL_REFERENCES : options.references,
+            options.address,
+          );
+    return plan;
+  }
+
+  it("reads the flag as unknown from the planned value alone", () => {
+    // The underlying extractor must still report the truth; only the policy
+    // above it is allowed to corroborate.
+    const plan = realCreatePlan();
+    const lambda = (plan.resource_changes as { address: string; change: unknown }[]).find(
+      (rc) => rc.address === SIMULATOR_ARMING_ADDRESS,
+    )!;
+    expect(readSimulatorFlag(lambda.change)).toEqual({ state: "unknown", value: null });
+  });
+
+  it("accepts the plan once the declared input and configuration corroborate it", () => {
+    const result = evaluatePlan(realCreatePlan(), { mode: "initial" });
+    expect(result.violations).toEqual([]);
+    expect(result.ok).toBe(true);
+    expect(result.simulatorEnabled).toBe("false");
+    expect(result.simulatorFlagSource).toBe("declared input + configuration");
+    expect(result.counts.create).toBe(ARCHITECTURE_A_RESOURCES.length);
+  });
+
+  it("still prefers the planned value when it is readable", () => {
+    const result = evaluatePlan(initialCreatePlan(), { mode: "initial" });
+    expect(result.ok).toBe(true);
+    expect(result.simulatorFlagSource).toBe("planned value");
+  });
+
+  it("does NOT blindly assume false: a declared true is refused", () => {
+    // The mutation this whole mechanism exists to prevent. The planned value is
+    // unknown and the configuration is intact, so the only thing standing
+    // between this plan and a PASS is the declared input.
+    const plan = realCreatePlan({ declared: true });
+    const result = evaluatePlan(plan, { mode: "initial" });
+    expect(result.ok).toBe(false);
+    expect(result.violations.map((v: { code: string }) => v.code)).toContain("simulator-flag-unresolved");
+    // Refused for the right reason: the declared input contradicts the mode,
+    // so it cannot corroborate anything.
+    expect(details(plan, "initial")).toContain("simulator_enabled=true");
+    expect(result.simulatorEnabled).not.toBe("false");
+  });
+
+  it.each([
+    ["a non-boolean declared input", { declared: "false" }],
+    ["a missing declared input", { declared: undefined }],
+  ])("fails closed on %s", (_label, options) => {
+    const found = codes(realCreatePlan(options), "initial");
+    expect(found).toContain("simulator-flag-unresolved");
+  });
+
+  it.each([
+    ["no configuration section at all", { configuration: undefined }],
+    ["a configuration with no root module", { configuration: {} }],
+    ["the Lambda absent from the configuration", { address: "aws_lambda_function.something_else" }],
+    ["no environment expression", { references: null }],
+    ["no references recorded", { configuration: { root_module: { resources: [{ address: SIMULATOR_ARMING_ADDRESS, expressions: { environment: [{ variables: {} }] } }] } } }],
+  ])("fails closed on %s", (_label, options) => {
+    const result = evaluatePlan(realCreatePlan(options), { mode: "initial" });
+    expect(result.ok).toBe(false);
+    expect(result.violations.map((v: { code: string }) => v.code)).toContain("simulator-flag-unresolved");
+  });
+
+  it("fails closed when the map no longer references var.simulator_enabled", () => {
+    // Rewired to a different variable: the declared input would still say
+    // false, but it would no longer be what drives the Lambda.
+    const rewired = REAL_REFERENCES.filter((r) => r !== "var.simulator_enabled").concat("var.some_other_flag");
+    const plan = realCreatePlan({ references: rewired });
+    expect(evaluatePlan(plan, { mode: "initial" }).ok).toBe(false);
+    expect(details(plan, "initial")).toContain("no longer references var.simulator_enabled");
+  });
+
+  it("fails closed when the map references something outside Architecture A", () => {
+    const injected = [...REAL_REFERENCES, "aws_ssm_parameter.injected.value"];
+    const plan = realCreatePlan({ references: injected });
+    expect(evaluatePlan(plan, { mode: "initial" }).ok).toBe(false);
+    expect(details(plan, "initial")).toContain("aws_ssm_parameter.injected");
+  });
+
+  it("does not offer the fallback on an update, where the values are concrete", () => {
+    // Arming and disarming must keep reading the real planned value, so the
+    // transition checks cannot be satisfied by the declared input.
+    const plan = disarmPlan() as Record<string, unknown>;
+    const lambda = (plan.resource_changes as { address: string; change: Record<string, unknown> }[]).find(
+      (rc) => rc.address === SIMULATOR_ARMING_ADDRESS,
+    )!;
+    (lambda.change.after as Record<string, unknown>).environment = [{ variables: null }];
+    lambda.change.after_unknown = { environment: [{ variables: true }] };
+    plan.configuration = configurationSection(REAL_REFERENCES);
+    const found = codes(plan, "initial");
+    expect(found).toContain("simulator-flag-unresolved");
+  });
+
+  it("normalizes references to the thing they identify", () => {
+    expect(normalizeReference("aws_lexv2models_bot.supplier_simulator.id")).toBe(
+      "aws_lexv2models_bot.supplier_simulator",
+    );
+    expect(normalizeReference("aws_lexv2models_bot.supplier_simulator")).toBe(
+      "aws_lexv2models_bot.supplier_simulator",
+    );
+    expect(normalizeReference("var.simulator_enabled")).toBe("var.simulator_enabled");
+    expect(normalizeReference("local.lex_alias_name")).toBe("local.lex_alias_name");
+    expect(normalizeReference("data.aws_iam_policy_document.lambda_assume.json")).toBe(
+      "data.aws_iam_policy_document.lambda_assume",
+    );
+  });
+
+  it("finds the references whichever container Terraform used", () => {
+    // The documented nested-block encoding is an array; the object form and a
+    // deeper wrapping are accepted too, so a shape difference cannot silently
+    // become a policy failure.
+    const shapes: unknown[] = [
+      [{ variables: { references: REAL_REFERENCES } }],
+      { variables: { references: REAL_REFERENCES } },
+      [[{ variables: { references: REAL_REFERENCES } }]],
+    ];
+    for (const environment of shapes) {
+      const plan = realCreatePlan({
+        configuration: {
+          root_module: {
+            resources: [{ address: SIMULATOR_ARMING_ADDRESS, expressions: { environment } }],
+          },
+        },
+      });
+      expect(readEnvironmentReferences(plan, SIMULATOR_ARMING_ADDRESS).state).toBe("found");
+      expect(evaluatePlan(plan, { mode: "initial" }).ok).toBe(true);
+    }
+  });
+
+  it("reports why the configuration could not be read", () => {
+    expect(readEnvironmentReferences({}, SIMULATOR_ARMING_ADDRESS).state).toBe("no-configuration-section");
+    expect(readEnvironmentReferences(realCreatePlan(), SIMULATOR_ARMING_ADDRESS)).toEqual({
+      state: "found",
+      references: REAL_REFERENCES,
+    });
   });
 });
 
