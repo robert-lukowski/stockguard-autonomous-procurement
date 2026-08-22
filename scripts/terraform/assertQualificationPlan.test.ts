@@ -11,6 +11,7 @@ import {
   readSimulatorFlag,
   normalizeReference,
   readEnvironmentReferences,
+  canonicalBoolean,
   // @ts-expect-error - plain .mjs module, deliberately dependency-free
 } from "./assertQualificationPlan.mjs";
 
@@ -743,6 +744,72 @@ describe("the unknown-environment shape a real create plan produces", () => {
     return plan;
   }
 
+  it("accepts the STRING form TF_VAR_ actually supplies", () => {
+    // Verified against Terraform 1.14.5: a `bool` variable passed through
+    // TF_VAR_simulator_enabled - which is how both workflows pass it - is
+    // recorded in the plan JSON as the string "false", never a boolean.
+    // Run 32575497267 was refused because this fixture used a boolean.
+    const plan = realCreatePlan({ declared: "false" });
+    expect(plan.variables.simulator_enabled).toEqual({ value: "false" });
+
+    const result = evaluatePlan(plan, { mode: "initial" });
+    expect(result.violations).toEqual([]);
+    expect(result.ok).toBe(true);
+    expect(result.simulatorEnabled).toBe("false");
+    expect(result.simulatorFlagSource).toBe("declared input + configuration");
+  });
+
+  it("accepts the string form for arming too", () => {
+    const plan = realCreatePlan({ declared: "true" });
+    // A create planned as armed is refused by the initial policy, correctly,
+    // but the declared input must still be RECOGNISED rather than rejected as
+    // an unparseable form.
+    const found = codes(plan, "initial");
+    // Recognised, and therefore refused by the declared-input guard rather
+    // than dismissed as an unparseable form.
+    expect(found).toContain("simulator-armed");
+    expect(details(plan, "initial")).not.toContain("not one of the four accepted forms");
+  });
+
+  it.each([
+    ["TRUE", "TRUE"],
+    ["True", "True"],
+    ["yes", "yes"],
+    ["1", "1"],
+    ["0", "0"],
+    ["", ""],
+    [" true (padded)", " true"],
+    ["the number 1", 1],
+    ["the number 0", 0],
+    ["null", null],
+    ["an object", { value: false }],
+  ])("still fails closed on %s", (_label, declared) => {
+    const plan = realCreatePlan({ declared });
+    const result = evaluatePlan(plan, { mode: "initial" });
+    expect(result.ok).toBe(false);
+    expect(result.violations.map((v: { code: string }) => v.code)).toContain("simulator-flag-unresolved");
+    expect(details(plan, "initial")).toContain("not one of the four accepted forms");
+  });
+
+  it("names corroboration as refused rather than reporting a bare planned value", () => {
+    const plan = realCreatePlan({ declared: "yes" });
+    const result = evaluatePlan(plan, { mode: "initial" });
+    expect(result.simulatorFlagSource).toBe("planned value (unknown); corroboration refused");
+    const text = formatReport(result);
+    expect(text).toContain("corroboration refused");
+    expect(details(plan, "initial")).toContain("That corroboration was REFUSED");
+  });
+
+  it("says corroboration is not offered at all on an update", () => {
+    const plan = disarmPlan() as Record<string, unknown>;
+    const lambda = (plan.resource_changes as { address: string; change: Record<string, unknown> }[]).find(
+      (rc) => rc.address === SIMULATOR_ARMING_ADDRESS,
+    )!;
+    (lambda.change.after as Record<string, unknown>).environment = [{ variables: null }];
+    lambda.change.after_unknown = { environment: [{ variables: true }] };
+    expect(details(plan, "initial")).toContain("corroboration is deliberately not offered");
+  });
+
   it("reads the flag as unknown from the planned value alone", () => {
     // The underlying extractor must still report the truth; only the policy
     // above it is allowed to corroborate.
@@ -783,8 +850,8 @@ describe("the unknown-environment shape a real create plan produces", () => {
   });
 
   it.each([
-    ["a non-boolean declared input", { declared: "false" }],
     ["a missing declared input", { declared: undefined }],
+    ["a declared input that is an unrecognised string", { declared: "maybe" }],
   ])("fails closed on %s", (_label, options) => {
     const found = codes(realCreatePlan(options), "initial");
     expect(found).toContain("simulator-flag-unresolved");
@@ -865,6 +932,48 @@ describe("the unknown-environment shape a real create plan produces", () => {
       });
       expect(readEnvironmentReferences(plan, SIMULATOR_ARMING_ADDRESS).state).toBe("found");
       expect(evaluatePlan(plan, { mode: "initial" }).ok).toBe(true);
+    }
+  });
+
+  it("applies the same normalization to the declared-input guards", () => {
+    // Both guards compare the declared input directly. Before this fix they
+    // compared against a JS boolean, so with the string form TF_VAR_ supplies
+    // the initial-mode guard silently did nothing and - worse - the
+    // qualification guard fired against a correctly armed run.
+    const bare = (declared: unknown, enableRecording: unknown = "false") => ({
+      format_version: "1.2",
+      terraform_version: "1.14.5",
+      variables: {
+        simulator_enabled: { value: declared },
+        enable_call_recording: { value: enableRecording },
+      },
+      resource_changes: [],
+    });
+
+    for (const armed of [true, "true"]) {
+      expect(codes(bare(armed), "initial")).toContain("simulator-armed");
+      expect(codes(bare(armed), "qualification")).not.toContain("simulator-not-armed");
+    }
+    for (const disarmed of [false, "false"]) {
+      expect(codes(bare(disarmed), "initial")).not.toContain("simulator-armed");
+      expect(codes(bare(disarmed), "qualification")).toContain("simulator-not-armed");
+    }
+    // Recording refusal must recognise both forms too.
+    for (const recording of [true, "true"]) {
+      expect(codes(bare(false, recording), "initial")).toContain("recording-enabled");
+    }
+    for (const recording of [false, "false"]) {
+      expect(codes(bare(false, recording), "initial")).not.toContain("recording-enabled");
+    }
+  });
+
+  it("normalizes exactly four canonical boolean forms and nothing else", () => {
+    expect(canonicalBoolean(true)).toBe("true");
+    expect(canonicalBoolean(false)).toBe("false");
+    expect(canonicalBoolean("true")).toBe("true");
+    expect(canonicalBoolean("false")).toBe("false");
+    for (const rejected of ["TRUE", "True", "FALSE", "yes", "no", "1", "0", "", " true", 1, 0, null, undefined, {}, []]) {
+      expect(canonicalBoolean(rejected)).toBeNull();
     }
   });
 

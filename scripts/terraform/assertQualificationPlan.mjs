@@ -313,6 +313,33 @@ export function readEnvironmentReferences(plan, address) {
 }
 
 /**
+ * Normalise a declared boolean input to "true" / "false", accepting ONLY the
+ * four canonical forms and refusing everything else.
+ *
+ * Both forms occur in practice and were verified against Terraform 1.14.5
+ * rather than assumed:
+ *
+ *   boolean  - a value supplied through a .tfvars file or -var
+ *   string   - a value supplied through TF_VAR_*, which is how both workflows
+ *              pass it. Environment variables are strings, and the plan JSON
+ *              records the variable as given, so a `bool` variable arrives
+ *              here as the STRING "false".
+ *
+ * Deliberately NOT accepted, even though Terraform itself would coerce some of
+ * them: "TRUE", "True", "yes", "1", 0, 1, null, undefined, or a missing key.
+ * A value this policy cannot recognise exactly is a value it refuses.
+ *
+ * @returns {"true" | "false" | null}
+ */
+export function canonicalBoolean(value) {
+  if (value === true) return "true";
+  if (value === false) return "false";
+  if (value === "true") return "true";
+  if (value === "false") return "false";
+  return null;
+}
+
+/**
  * Last-resort resolution of SIMULATOR_ENABLED when the planned value itself is
  * opaque.
  *
@@ -334,14 +361,15 @@ export function readEnvironmentReferences(plan, address) {
  * @returns {{ ok: true, value: string, references: string[] } | { ok: false, reason: string }}
  */
 export function resolveSimulatorFlagFromConfiguration(plan, mode, expectedValue) {
-  const declared = plan?.variables?.simulator_enabled?.value;
-  if (typeof declared !== "boolean") {
+  const raw = plan?.variables?.simulator_enabled?.value;
+  const declared = canonicalBoolean(raw);
+  if (declared === null) {
     return {
       ok: false,
-      reason: `plan.variables.simulator_enabled.value is ${JSON.stringify(declared)}, not a boolean, so the declared input cannot corroborate it`,
+      reason: `plan.variables.simulator_enabled.value is ${JSON.stringify(raw)}, which is not one of the four accepted forms (true, false, "true", "false"), so the declared input cannot corroborate it`,
     };
   }
-  if (String(declared) !== expectedValue) {
+  if (declared !== expectedValue) {
     return {
       ok: false,
       reason: `the declared input simulator_enabled=${declared} does not match the "${expectedValue}" the ${mode} policy requires`,
@@ -453,24 +481,28 @@ export function evaluatePlan(plan, { mode }) {
   let flagSource = "planned value";
 
   // --- 1. Input variables. Known before any resource is inspected. ----------
-  const declaredSimulator = plan.variables?.simulator_enabled?.value;
-  const declaredRecording = plan.variables?.enable_call_recording?.value;
+  // Normalised through the same four-form reader as the corroboration path.
+  // TF_VAR_* supplies these as strings, so comparing the raw value against a
+  // JavaScript boolean would silently disable the initial-mode guard and,
+  // worse, make the qualification guard fire against a correctly armed run.
+  const declaredSimulator = canonicalBoolean(plan.variables?.simulator_enabled?.value);
+  const declaredRecording = canonicalBoolean(plan.variables?.enable_call_recording?.value);
 
-  if (declaredRecording === true) {
+  if (declaredRecording === "true") {
     add(
       "recording-enabled",
       "var.enable_call_recording",
       "recording is enabled; no policy mode permits it until the instance is confirmed to have no existing CALL_RECORDINGS configuration",
     );
   }
-  if (mode === "initial" && declaredSimulator === true) {
+  if (mode === "initial" && declaredSimulator === "true") {
     add(
       "simulator-armed",
       "var.simulator_enabled",
       "initial deployment must not arm the simulator; use the qualification policy for that, as a separate deliberate act",
     );
   }
-  if (mode === "qualification" && declaredSimulator !== true) {
+  if (mode === "qualification" && declaredSimulator !== "true") {
     add(
       "simulator-not-armed",
       "var.simulator_enabled",
@@ -577,6 +609,7 @@ export function evaluatePlan(plan, { mode }) {
           flagSource = "declared input + configuration";
         } else {
           fallbackReason = corroborated.reason;
+          flagSource = "planned value (unknown); corroboration refused";
         }
       }
       simulatorFlag = flag;
@@ -585,7 +618,9 @@ export function evaluatePlan(plan, { mode }) {
         add(
           "simulator-flag-unresolved",
           address,
-          `SIMULATOR_ENABLED is ${planned.state} in the plan${action === "create" ? `, and it could not be corroborated: ${fallbackReason}` : ""}. This fails closed rather than being assumed to be "${wanted}".`,
+          action === "create"
+            ? `SIMULATOR_ENABLED is ${planned.state} in the planned value, so it was checked against the declared input and the plan's configuration instead. That corroboration was REFUSED: ${fallbackReason}. Failing closed rather than assuming "${wanted}".`
+            : `SIMULATOR_ENABLED is ${planned.state} in the planned value, and this is an ${action}, where corroboration is deliberately not offered because the values are concrete. Failing closed rather than assuming "${wanted}".`,
         );
       } else if (flag.value !== wanted) {
         add(
