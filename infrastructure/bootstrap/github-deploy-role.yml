@@ -76,6 +76,7 @@ Resources:
                   - lambda:DeleteFunction
                   - lambda:GetFunction
                   - lambda:GetFunctionConfiguration
+                  - lambda:GetFunctionCodeSigningConfig
                   - lambda:ListVersionsByFunction
                   - lambda:UpdateFunctionCode
                   - lambda:UpdateFunctionConfiguration

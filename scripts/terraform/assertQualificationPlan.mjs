@@ -51,7 +51,7 @@ export const ARCHITECTURE_A_RESOURCES = Object.freeze([
   "aws_lambda_permission.lex_invoke",
   // Lex V2 bot, its service role, locale, intents, version and runtime alias.
   "aws_iam_role.lex_bot",
-  "aws_iam_role_policy_attachment.lex_bot",
+  "aws_iam_role_policy.lex_bot",
   "aws_lexv2models_bot.supplier_simulator",
   "aws_lexv2models_bot_locale.en",
   "aws_lexv2models_intent.get_supplier_quote",
@@ -457,9 +457,9 @@ export function evaluatePlan(plan, { mode }) {
    * Qualification arms the runtime. Initial covers BOTH the first deployment
    * and the rollback that disarms afterwards - a rollback selects
    * simulator_enabled=false, which is the initial policy, and disarming is a
-   * legitimate `update` to a resource that already exists. Without this the
-   * rollback in the runbook could not be executed through the gated path at
-   * all, which would have pushed the operator to disarm by hand.
+   * legitimate `update` to a resource that exists. Without this the rollback
+   * in the runbook could not be executed through the gated path at all, which
+   * would have pushed the operator to disarm by hand.
    *
    * It stays exactly one update to exactly one resource, changing exactly one
    * environment variable, under the same immutable-attribute protections as
