@@ -115,6 +115,15 @@ function localizedMessage(
         : "Les conditions commerciales standard approuvées restent inchangées.",
       EndConversation: "La réponse synthétique à la demande est terminée.",
     },
+    en_US: {
+      GetSupplierQuote: `For request ${'${quote.rfqId}'}, ${'${values.quantity}'} of ${'${values.requested}'} units are available at ${'${values.price}'} ${'${values.currency}'} per unit. Delivery on ${'${values.delivery}'}.`,
+      CheckRemainingQuantity: `The remaining ${'${values.remaining}'} units can be delivered on ${'${values.remainderDelivery}'}.`,
+      ConfirmOfferValidity: `The quote is valid until ${'${values.validUntil}'}.`,
+      ConfirmCommercialTerms: quote.commercialTermsChanged
+        ? "Payment terms have changed from net 30 days to advance payment."
+        : "The approved standard commercial terms remain unchanged.",
+      EndConversation: "That completes the synthetic quote response.",
+    },
     pl_PL: {
       GetSupplierQuote: `Dla zapytania ${quote.rfqId} dostępnych jest ${values.quantity} z ${values.requested} sztuk po ${values.price} ${values.currency} za sztukę. Dostawa: ${values.delivery}.`,
       CheckRemainingQuantity: `Pozostałe ${values.remaining} sztuk może zostać dostarczone ${values.remainderDelivery}.`,

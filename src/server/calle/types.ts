@@ -7,7 +7,7 @@ export type SyntheticSupplierRouting = {
   kind: "SYNTHETIC_SUPPLIER_SIMULATOR";
   rfqId: string;
   routingCode: string;
-  supplierProfileId: "DE_SUPPLIER" | "FR_SUPPLIER" | "PL_SUPPLIER";
+  supplierProfileId: "DE_SUPPLIER" | "FR_SUPPLIER" | "PL_SUPPLIER" | "EN_SUPPLIER";
   datasetVersion: string;
 };
 

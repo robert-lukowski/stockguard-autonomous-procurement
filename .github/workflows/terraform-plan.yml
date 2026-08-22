@@ -1,0 +1,131 @@
+name: Terraform Plan
+
+run-name: Terraform plan · ${{ github.ref_name }}
+
+# Plan only. This workflow can never apply: there is no apply step, and the
+# apply workflow is a separate file gated behind a protected environment.
+on:
+  pull_request:
+    paths:
+      - "infrastructure/terraform/**"
+      - ".github/workflows/terraform-plan.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+concurrency:
+  group: terraform-plan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    name: fmt, validate, plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "0"
+      # Terraform echoes variable values on error; keep the account id and
+      # instance id out of logs by passing them as env vars GitHub masks.
+      TF_VAR_aws_account_id: ${{ vars.AWS_ACCOUNT_ID }}
+      TF_VAR_connect_instance_id: ${{ vars.AWS_CONNECT_INSTANCE_ID }}
+      TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+
+    steps:
+      - name: Enforce repository identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY_ID" = "1341560793"
+          test "$GITHUB_REPOSITORY_OWNER_ID" = "207513888"
+
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Mask account identifiers
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::add-mask::${{ vars.AWS_ACCOUNT_ID }}"
+          echo "::add-mask::${{ vars.AWS_CONNECT_INSTANCE_ID }}"
+
+      - name: Configure Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      # The Lambda bundle is gitignored and rebuilt here, so the plan hashes
+      # exactly what this commit produces rather than a stale artifact.
+      - name: Build Lambda bundle
+        run: npm run build:lambda
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.14.5"
+          terraform_wrapper: false
+
+      - name: Terraform fmt
+        working-directory: infrastructure/terraform
+        run: terraform fmt -check -recursive -diff
+
+      # Formatting and syntax are checked without credentials first, so an
+      # obvious mistake fails before any AWS role is assumed.
+      - name: Terraform init (no backend)
+        working-directory: infrastructure/terraform
+        run: terraform init -backend=false
+
+      - name: Terraform validate
+        working-directory: infrastructure/terraform
+        run: terraform validate -no-color
+
+      - name: Assume deployment role
+        if: vars.AWS_DEPLOY_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@254c19bd240aabef8777f48595e9d2d7b972184b # v6.2.1
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: stockguard-plan-${{ github.run_id }}
+          role-duration-seconds: 900
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          mask-aws-account-id: true
+          unset-current-credentials: true
+
+      # A refreshing plan needs read access to existing resources. It does NOT
+      # need write access; the deploy role's write permissions are simply
+      # unused here. We do not widen the read-only inventory role for this.
+      - name: Terraform init and plan
+        if: vars.AWS_DEPLOY_ROLE_ARN != ''
+        working-directory: infrastructure/terraform
+        run: |
+          set -euo pipefail
+          terraform init -reconfigure
+          terraform plan -no-color -lock=false -out=tfplan | tee plan.txt
+
+      - name: Summarize plan
+        if: vars.AWS_DEPLOY_ROLE_ARN != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo '### Terraform plan'
+            echo '```'
+            # Resource counts only. The full plan can echo ARNs and the
+            # contact-flow body, so it stays in the job log, not the summary.
+            grep -E '^(Plan:|No changes)' plan.txt || echo 'see job log'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report missing deployment role
+        if: vars.AWS_DEPLOY_ROLE_ARN == ''
+        shell: bash
+        run: |
+          echo "::notice::AWS_DEPLOY_ROLE_ARN is not set. fmt/validate ran; the AWS plan was skipped."

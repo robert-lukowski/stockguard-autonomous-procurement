@@ -23,8 +23,10 @@ import { ProcurementStateMachine, type WorkflowStateEvent } from "./stateMachine
 import {
   defaultCallExecutionPolicy,
   InMemoryWorkflowRunStore,
+  realSleep,
   withTimeout,
   type CallExecutionPolicy,
+  type Sleep,
   type WorkflowRunStore,
 } from "./resilience";
 
@@ -120,6 +122,8 @@ export class ProcurementWorkflow {
     private readonly stateObserver?: (event: WorkflowStateEvent) => void,
     private readonly runStore: WorkflowRunStore = new InMemoryWorkflowRunStore(),
     private readonly callPolicy: CallExecutionPolicy = defaultCallExecutionPolicy,
+    /** Injected so tests exercise the cadence without waiting on real time. */
+    private readonly sleep: Sleep = realSleep,
   ) {}
 
   private async executeSupplierCall(
@@ -147,12 +151,28 @@ export class ProcurementWorkflow {
           this.callPolicy.timeoutMs,
         );
 
+        /*
+         * Wait before each poll, never after a terminal one.
+         *
+         * The loop condition is re-evaluated after every fetch, so a task that
+         * reaches a terminal state exits immediately without paying another
+         * interval. The budget stays bounded by `maximumPolls`.
+         */
         for (
           let poll = 0;
           ["planned", "queued", "in_progress"].includes(task.status) &&
           poll < this.callPolicy.maximumPolls;
           poll += 1
         ) {
+          await this.sleep(
+            poll === 0
+              ? this.callPolicy.initialPollDelayMs
+              : this.callPolicy.pollIntervalMs,
+          );
+          if (this.runStore.isCancelled(request.workflowId)) return {
+            task: unresolvedTask(task.callId, "FAILED", "Cancelled while awaiting the call result"),
+            attemptCount: attempt,
+          };
           task = await withTimeout(
             this.supplierCalls.getSupplierCall(task.callId),
             this.callPolicy.timeoutMs,

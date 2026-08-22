@@ -223,3 +223,24 @@ dist/
 .vite/
 *.tsbuildinfo
 npm-debug.log*
+
+# Terraform
+**/.terraform/*
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+*.tfvars
+*.tfvars.json
+!infrastructure/terraform/example.tfvars
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# Built Lambda artifacts (rebuilt deterministically by npm run build:lambda)
+infrastructure/terraform/build/

@@ -47,6 +47,22 @@ export type SupplierSimulatorLambdaGuard = {
   allowedBotIds: string[];
   allowedAliasIds: string[];
   allowedLocales: LexSimulatorLocale[];
+  /**
+   * Architecture A qualification entry mode.
+   *
+   * The routing design resolves an RFQ from a spoken six-digit code via the
+   * `IdentifySyntheticRfq` intent. The first controlled English qualification
+   * deliberately does not test code recognition — it tests only whether the
+   * telephony path works at all — so there is no routing turn to carry an RFQ.
+   *
+   * When set, business intents fall back to this single pre-registered RFQ.
+   * Routing is NOT bypassed or weakened: whenever a session does carry an RFQ,
+   * that one wins and the normal path runs unchanged. This is an additional
+   * entry point, not a hole in the existing one.
+   *
+   * Leave undefined for Architecture B and for anything resembling production.
+   */
+  qualificationRfqId?: string;
 };
 
 const intents = new Set<SupplierSimulatorIntent>([
@@ -143,12 +159,19 @@ export function createSupplierSimulatorLexHandler(
         return failed(event, "SYNTHETIC_DATA_UNAVAILABLE");
       }
     }
-    if (!rfqId) return failed(event, "RFQ_CONTEXT_INVALID");
+    // A session-carried RFQ always wins; the qualification RFQ is only a
+    // fallback for the fixed single-profile entry mode described above.
+    const effectiveRfqId = rfqId ?? guard.qualificationRfqId;
+    if (!effectiveRfqId) return failed(event, "RFQ_CONTEXT_INVALID");
     const intent = event.sessionState.intent.name as SupplierSimulatorIntent;
     if (!intents.has(intent)) return failed(event, "INTENT_NOT_ALLOWED");
 
     try {
-      const result = await service.respond({ intent, rfqId, profileId });
+      const result = await service.respond({
+        intent,
+        rfqId: effectiveRfqId,
+        profileId,
+      });
       if (result.quote.locale !== event.bot.localeId) {
         return failed(event, "PROFILE_LOCALE_MISMATCH");
       }

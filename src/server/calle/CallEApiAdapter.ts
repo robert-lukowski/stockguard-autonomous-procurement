@@ -30,7 +30,7 @@ type CallEApiConfig = {
     phoneE164: string;
     region: SupportedCallRegion;
     allowedProfileIds: Array<
-      "DE_SUPPLIER" | "FR_SUPPLIER" | "PL_SUPPLIER"
+      "DE_SUPPLIER" | "FR_SUPPLIER" | "PL_SUPPLIER" | "EN_SUPPLIER"
     >;
   };
 };
