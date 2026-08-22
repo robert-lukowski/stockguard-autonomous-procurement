@@ -86,7 +86,10 @@ jobs:
         with:
           name: terraform-provider-lock
           path: infrastructure/terraform/.terraform.lock.hcl
-          if-no-files-found: warn
+          # .terraform.lock.hcl is a dotfile, and upload-artifact skips hidden
+          # files by default - without this the upload silently finds nothing.
+          include-hidden-files: true
+          if-no-files-found: error
           retention-days: 7
 
       # No AWS inputs here on purpose: `terraform validate` checks the
