@@ -88,6 +88,55 @@ time. The Connect association stays a CLI step: one idempotent command in the
 runbook is safer than putting a half-supported resource into state where a
 later plan might try to "correct" it.
 
+## Breaking the Lambda ↔ alias cycle
+
+The Lex alias's code hook points at the Lambda. The Lambda originally guarded
+on the alias **id**, which Terraform generates when it creates the alias — so
+each resource needed the other, and `terraform validate` reported:
+
+```
+Cycle: aws_lambda_function.supplier_simulator, awscc_lex_bot_alias.supplier_simulator
+```
+
+The Lambda now guards on the alias **name** instead. Lex V2 sends both
+`bot.aliasId` and `bot.aliasName`, and the name (`qualification`) is chosen by
+us, so it identifies the alias just as precisely without the circular
+reference.
+
+Alias validation is not weakened. `aliasAllowed` accepts an event only when it
+matches an explicitly allowlisted id **or** name, and rejects everything when
+neither list holds anything — an unconfigured guard is never an open one.
+Architecture B can go back to id allowlisting unchanged.
+
+`aws_lambda_permission` still pins `source_arn` to the real generated alias id.
+That is a separate resource, so it adds no cycle, and the permission is never
+widened to all Lex aliases.
+
+Resulting order: bot → Lambda → alias → permission.
+
+## Required GitHub configuration
+
+| Name | Kind | Why |
+|---|---|---|
+| `AWS_ACCOUNT_ID` | **Secret** | GitHub masks secrets from first use; a job-level variable is already in the environment before any `::add-mask::` could run, and masking is not retroactive |
+| `AWS_CONNECT_INSTANCE_ID` | **Secret** | same |
+| `AWS_REGION` | Variable | not sensitive |
+| `AWS_DEPLOY_ROLE_ARN` | Variable | not sensitive, and its presence is what gates whether the plan job touches AWS at all |
+
+Until `AWS_DEPLOY_ROLE_ARN` is set, the plan workflow runs `fmt`, `init
+-backend=false` and `validate`, then finishes successfully with an explicit
+notice that the AWS plan was skipped. No credential is requested and no AWS
+API call is made. That is the intended state before the deployment bootstrap
+is approved.
+
+## Provider lock file
+
+Not committed yet. This repository's build environment cannot reach
+`registry.terraform.io`, and a fabricated lock file would be worse than none.
+The plan workflow uploads the lock file the runner genuinely generates as the
+`terraform-provider-lock` artifact — download it and commit it to pin
+providers reproducibly.
+
 ## Safety properties
 
 - `simulator_enabled` defaults to **false**. Deploying does not make the

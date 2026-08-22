@@ -29,9 +29,12 @@ resource "aws_lambda_function" "supplier_simulator" {
 
   environment {
     variables = {
-      SIMULATOR_ENABLED         = tostring(var.simulator_enabled)
-      ALLOWED_LEX_BOT_IDS       = aws_lexv2models_bot.supplier_simulator.id
-      ALLOWED_LEX_ALIAS_IDS     = awscc_lex_bot_alias.supplier_simulator.bot_alias_id
+      SIMULATOR_ENABLED   = tostring(var.simulator_enabled)
+      ALLOWED_LEX_BOT_IDS = aws_lexv2models_bot.supplier_simulator.id
+      # Deliberately the alias NAME, not its generated id: the alias's code
+      # hook points at this function, so referencing the id here would create
+      # a Lambda <-> alias dependency cycle.
+      ALLOWED_LEX_ALIAS_NAMES   = local.lex_alias_name
       ALLOWED_LEX_LOCALES       = local.lex_locale_id
       QUALIFICATION_SKU         = var.qualification_sku
       QUALIFICATION_QUANTITY    = tostring(var.qualification_quantity)

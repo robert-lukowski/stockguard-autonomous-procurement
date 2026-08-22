@@ -28,11 +28,11 @@ jobs:
     env:
       TF_IN_AUTOMATION: "true"
       TF_INPUT: "0"
-      # Terraform echoes variable values on error; keep the account id and
-      # instance id out of logs by passing them as env vars GitHub masks.
-      TF_VAR_aws_account_id: ${{ vars.AWS_ACCOUNT_ID }}
-      TF_VAR_connect_instance_id: ${{ vars.AWS_CONNECT_INSTANCE_ID }}
-      TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+      # AWS identifiers are deliberately NOT set at job level. They are
+      # supplied as step-level secrets on the one step that needs them, so
+      # GitHub masks them from first use. Masking is not retroactive: a
+      # job-level variable is already in the environment before any
+      # ::add-mask:: could run.
 
     steps:
       - name: Enforce repository identity
@@ -46,13 +46,6 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-
-      - name: Mask account identifiers
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "::add-mask::${{ vars.AWS_ACCOUNT_ID }}"
-          echo "::add-mask::${{ vars.AWS_CONNECT_INSTANCE_ID }}"
 
       - name: Configure Node.js
         uses: actions/setup-node@v4
@@ -83,6 +76,22 @@ jobs:
         working-directory: infrastructure/terraform
         run: terraform init -backend=false
 
+      # The runner CAN reach the provider registry, so it produces the real
+      # lock file. It is uploaded rather than invented: this repository's build
+      # environment cannot reach the registry, and fabricating checksums would
+      # defeat the point of a lock file. Download this artifact and commit it
+      # to pin providers reproducibly.
+      - name: Upload generated provider lock file
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-provider-lock
+          path: infrastructure/terraform/.terraform.lock.hcl
+          if-no-files-found: warn
+          retention-days: 7
+
+      # No AWS inputs here on purpose: `terraform validate` checks the
+      # configuration and does not evaluate variable values, so this stage
+      # runs with no account id, no instance id and no credentials.
       - name: Terraform validate
         working-directory: infrastructure/terraform
         run: terraform validate -no-color
@@ -95,16 +104,22 @@ jobs:
           role-session-name: stockguard-plan-${{ github.run_id }}
           role-duration-seconds: 900
           aws-region: ${{ vars.AWS_REGION }}
-          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          allowed-account-ids: ${{ secrets.AWS_ACCOUNT_ID }}
           mask-aws-account-id: true
           unset-current-credentials: true
 
       # A refreshing plan needs read access to existing resources. It does NOT
       # need write access; the deploy role's write permissions are simply
       # unused here. We do not widen the read-only inventory role for this.
+      # Identifiers enter the job here and nowhere earlier. As secrets they
+      # are masked by GitHub from the moment they are referenced.
       - name: Terraform init and plan
         if: vars.AWS_DEPLOY_ROLE_ARN != ''
         working-directory: infrastructure/terraform
+        env:
+          TF_VAR_aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          TF_VAR_connect_instance_id: ${{ secrets.AWS_CONNECT_INSTANCE_ID }}
+          TF_VAR_aws_region: ${{ vars.AWS_REGION }}
         run: |
           set -euo pipefail
           terraform init -reconfigure
@@ -124,8 +139,18 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Report missing deployment role
+      # Desired state until the AWS bootstrap is approved: the job succeeds
+      # having proven fmt, init and validate, and never touches AWS.
+      - name: Report skipped AWS plan
         if: vars.AWS_DEPLOY_ROLE_ARN == ''
         shell: bash
         run: |
-          echo "::notice::AWS_DEPLOY_ROLE_ARN is not set. fmt/validate ran; the AWS plan was skipped."
+          set -euo pipefail
+          {
+            echo '### AWS plan skipped'
+            echo 'AWS_DEPLOY_ROLE_ARN is not configured, so no AWS credential was'
+            echo 'requested and no AWS API call was made.'
+            echo ''
+            echo 'terraform fmt, init and validate ran and passed.'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::AWS plan skipped - deployment bootstrap not configured. fmt/init/validate passed."

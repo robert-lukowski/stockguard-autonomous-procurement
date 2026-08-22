@@ -5,7 +5,7 @@ import { lexFulfillment } from "./supplierSimulatorHandler";
 const env = {
   SIMULATOR_ENABLED: "true",
   ALLOWED_LEX_BOT_IDS: "BOTID123",
-  ALLOWED_LEX_ALIAS_IDS: "ALIASID1",
+  ALLOWED_LEX_ALIAS_NAMES: "qualification",
   ALLOWED_LEX_LOCALES: "en_US",
   QUALIFICATION_SKU: "CF-220",
   QUALIFICATION_QUANTITY: "8",
@@ -15,7 +15,7 @@ const env = {
 function event(overrides: Partial<LexV2Event> = {}): LexV2Event {
   return {
     sessionId: "session-1",
-    bot: { id: "BOTID123", aliasId: "ALIASID1", localeId: "en_US" },
+    bot: { id: "BOTID123", aliasId: "GENERATED", aliasName: "qualification", localeId: "en_US" },
     sessionState: { intent: { name: "GetSupplierQuote" } },
     ...overrides,
   };
@@ -60,10 +60,16 @@ describe("supplier simulator Lambda composition root", () => {
 
   it("fails closed for a bot, alias or locale outside the guard", async () => {
     const wrongBot = await lexFulfillment(
-      event({ bot: { id: "OTHER", aliasId: "ALIASID1", localeId: "en_US" } }),
+      event({ bot: { id: "OTHER", aliasId: "GENERATED", aliasName: "qualification", localeId: "en_US" } }),
     );
     const wrongLocale = await lexFulfillment(
-      event({ bot: { id: "BOTID123", aliasId: "ALIASID1", localeId: "de_DE" } }),
+      event({ bot: { id: "BOTID123", aliasId: "GENERATED", aliasName: "qualification", localeId: "de_DE" } }),
+    );
+    const wrongAlias = await lexFulfillment(
+      event({ bot: { id: "BOTID123", aliasId: "GENERATED", aliasName: "TestBotAlias", localeId: "en_US" } }),
+    );
+    expect(wrongAlias.sessionState.sessionAttributes.simulatorStatus).toBe(
+      "FAILED_CLOSED",
     );
 
     expect(wrongBot.sessionState.sessionAttributes.simulatorStatus).toBe(

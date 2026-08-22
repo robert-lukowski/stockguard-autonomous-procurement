@@ -45,8 +45,10 @@ jobs:
     env:
       TF_IN_AUTOMATION: "true"
       TF_INPUT: "0"
-      TF_VAR_aws_account_id: ${{ vars.AWS_ACCOUNT_ID }}
-      TF_VAR_connect_instance_id: ${{ vars.AWS_CONNECT_INSTANCE_ID }}
+      # Secrets, so GitHub masks them from first use, and referenced only by
+      # the Terraform steps below rather than for the whole job.
+      TF_VAR_aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+      TF_VAR_connect_instance_id: ${{ secrets.AWS_CONNECT_INSTANCE_ID }}
       TF_VAR_aws_region: ${{ vars.AWS_REGION }}
 
     steps:
@@ -72,13 +74,6 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-
-      - name: Mask account identifiers
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "::add-mask::${{ vars.AWS_ACCOUNT_ID }}"
-          echo "::add-mask::${{ vars.AWS_CONNECT_INSTANCE_ID }}"
 
       - name: Configure Node.js
         uses: actions/setup-node@v4
@@ -110,7 +105,7 @@ jobs:
           role-session-name: stockguard-apply-${{ github.run_id }}
           role-duration-seconds: 1800
           aws-region: ${{ vars.AWS_REGION }}
-          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          allowed-account-ids: ${{ secrets.AWS_ACCOUNT_ID }}
           mask-aws-account-id: true
           unset-current-credentials: true
 

@@ -90,6 +90,25 @@ describe("infrastructure safety invariants", () => {
     expect(allTf).not.toContain("aws_connect_phone_number");
   });
 
+  it("keeps the Lambda free of any dependency on the generated alias id", () => {
+    // The alias's code hook points at the Lambda. If the Lambda also read the
+    // alias id, Terraform would report a cycle - which it did.
+    const lambda = tf("lambda.tf");
+    const functionBlock = lambda.slice(
+      lambda.indexOf('resource "aws_lambda_function"'),
+      lambda.indexOf('resource "aws_lambda_permission"'),
+    );
+    expect(functionBlock).not.toContain("awscc_lex_bot_alias");
+    expect(functionBlock).toContain("ALLOWED_LEX_ALIAS_NAMES");
+  });
+
+  it("still pins the Lambda invoke permission to the real generated alias", () => {
+    // Breaking the cycle must not turn into "any Lex alias may invoke us".
+    const lambda = tf("lambda.tf");
+    expect(lambda).toContain("awscc_lex_bot_alias.supplier_simulator.bot_alias_id");
+    expect(lambda).not.toMatch(/source_arn\s*=\s*"[^"]*bot-alias\/\*/);
+  });
+
   it("defers DynamoDB, Secrets Manager and KMS to a later architecture", () => {
     expect(allTf).not.toContain("resource \"aws_dynamodb_table\"");
     expect(allTf).not.toContain("resource \"aws_secretsmanager_secret\"");
@@ -125,9 +144,30 @@ describe("workflow safety invariants", () => {
     expect(apply).toMatch(/terraform apply[^\n]*tfplan/);
   });
 
-  it("masks account identifiers in both workflows", () => {
-    expect(plan).toContain("::add-mask::");
-    expect(apply).toContain("::add-mask::");
+  it("never exposes AWS identifiers as plain job-level variables", () => {
+    // Masking is not retroactive. A job-level `vars.*` identifier is already
+    // in the environment before any ::add-mask:: could run, so these must be
+    // secrets, referenced as late as possible.
+    for (const workflow of [plan, apply]) {
+      expect(workflow).not.toContain("vars.AWS_ACCOUNT_ID");
+      expect(workflow).not.toContain("vars.AWS_CONNECT_INSTANCE_ID");
+      expect(workflow).toContain("secrets.AWS_ACCOUNT_ID");
+      expect(workflow).toContain("secrets.AWS_CONNECT_INSTANCE_ID");
+    }
+  });
+
+  it("keeps the credential-free stage free of AWS inputs entirely", () => {
+    // fmt / init -backend=false / validate must run before any identifier or
+    // credential enters the job.
+    const beforePlan = plan.slice(0, plan.indexOf("Assume deployment role"));
+    expect(beforePlan).toContain("terraform validate");
+    expect(beforePlan).not.toContain("AWS_ACCOUNT_ID");
+    expect(beforePlan).not.toContain("AWS_CONNECT_INSTANCE_ID");
+  });
+
+  it("succeeds with an explicit notice when the deploy role is unconfigured", () => {
+    expect(plan).toContain("AWS plan skipped");
+    expect(plan).toContain("vars.AWS_DEPLOY_ROLE_ARN == ''");
   });
 
   it("uses OIDC rather than static AWS keys", () => {

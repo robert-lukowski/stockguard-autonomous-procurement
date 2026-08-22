@@ -65,6 +65,7 @@ two first.
 | B4 | Lambda invoked | CloudWatch log line present | | |
 | B5 | Intent progression observed | `GetSupplierQuote` → … | | |
 | B6 | Intent recognition failures | FallbackIntent count | | |
+| B6a | **Multi-turn attributes survive** | turn 2 not `RFQ_CONTEXT_INVALID` | | |
 | B7 | Lambda errors | none | | |
 | B8 | Lambda duration / cold start | — | | |
 | B9 | `simulatorStatus` in session attributes | `SYNTHETIC` | | |

@@ -149,7 +149,7 @@ resource "aws_lexv2models_bot_version" "v1" {
 # bot in the console.
 resource "awscc_lex_bot_alias" "supplier_simulator" {
   bot_id         = aws_lexv2models_bot.supplier_simulator.id
-  bot_alias_name = "qualification"
+  bot_alias_name = local.lex_alias_name
   bot_version    = aws_lexv2models_bot_version.v1.bot_version
   description    = "Versioned runtime alias used by the Connect contact flow."
 

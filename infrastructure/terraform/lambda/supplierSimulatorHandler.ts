@@ -88,10 +88,21 @@ function buildHandler(): (event: LexV2Event) => Promise<LexV2Response> {
     ),
   );
 
+  /*
+   * Alias is allowlisted by NAME, not id.
+   *
+   * The alias points at this Lambda through its code hook. If the Lambda also
+   * had to know the AWS-generated alias id, the two resources would depend on
+   * each other and Terraform would report a cycle. The alias name is chosen by
+   * us and stable, so it identifies the alias just as precisely without the
+   * circular reference. `aliasAllowed` still rejects everything when no
+   * allowlist is configured.
+   */
   return createSupplierSimulatorLexHandler(service, {
     enabled: process.env.SIMULATOR_ENABLED === "true",
     allowedBotIds: list("ALLOWED_LEX_BOT_IDS"),
-    allowedAliasIds: list("ALLOWED_LEX_ALIAS_IDS"),
+    allowedAliasIds: [],
+    allowedAliasNames: list("ALLOWED_LEX_ALIAS_NAMES"),
     allowedLocales: list("ALLOWED_LEX_LOCALES") as LexSimulatorLocale[],
     qualificationRfqId: QUALIFICATION_RFQ_ID,
   });
