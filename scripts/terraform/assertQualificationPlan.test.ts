@@ -13,6 +13,7 @@ import {
   readEnvironmentReferences,
   canonicalBoolean,
   FORGETTABLE_STATE_ADDRESS,
+  REPLACEABLE_BUILD_ADDRESS,
   REPLACEABLE_SNAPSHOT_ADDRESS,
   REPOINTABLE_ALIAS_ADDRESS,
   // @ts-expect-error - plain .mjs module, deliberately dependency-free
@@ -1100,6 +1101,73 @@ describe("resnapshotting the Lex bot version", () => {
     const result = evaluatePlan(initialCreatePlan(), { mode: "initial" });
     expect(result.snapshotReplacements).toEqual([]);
     expect(result.aliasRepoints).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("permits the alias repoint however the plan orders its resource changes", () => {
+    // The alias must follow the resnapshot regardless of whether Terraform
+    // emits it before or after the version, so the verdict cannot hinge on
+    // an ordering the gate does not control.
+    const plan = planWith([
+      [REPLACEABLE_SNAPSHOT_ADDRESS, ["create", "delete"]],
+      [REPOINTABLE_ALIAS_ADDRESS, ["update"]],
+    ]);
+    plan.resource_changes.reverse();
+    const result = evaluatePlan(plan, { mode: "initial" });
+    expect(result.violations).toEqual([]);
+    expect(result.aliasRepoints).toEqual([REPOINTABLE_ALIAS_ADDRESS]);
+  });
+});
+
+describe("rebuilding the Lex locale", () => {
+  function planWith(entries: [string, string[]][]) {
+    const plan = initialCreatePlan();
+    for (const [address, actions] of entries) {
+      const existing = plan.resource_changes.find((rc: { address: string }) => rc.address === address);
+      if (existing) existing.change.actions = actions;
+      else plan.resource_changes.push(change(address, actions, {}, {}));
+    }
+    return plan;
+  }
+
+  it("permits replacing the build step, which is its whole lifecycle", () => {
+    const result = evaluatePlan(planWith([[REPLACEABLE_BUILD_ADDRESS, ["create", "delete"]]]), {
+      mode: "initial",
+    });
+    expect(result.violations).toEqual([]);
+    expect(result.buildReplacements).toEqual([REPLACEABLE_BUILD_ADDRESS]);
+  });
+
+  it("permits a rebuild that carries a resnapshot and an alias repoint", () => {
+    const result = evaluatePlan(
+      planWith([
+        [REPLACEABLE_BUILD_ADDRESS, ["create", "delete"]],
+        [REPLACEABLE_SNAPSHOT_ADDRESS, ["create", "delete"]],
+        [REPOINTABLE_ALIAS_ADDRESS, ["update"]],
+      ]),
+      { mode: "initial" },
+    );
+    expect(result.violations).toEqual([]);
+    expect(result.buildReplacements).toEqual([REPLACEABLE_BUILD_ADDRESS]);
+    expect(result.snapshotReplacements).toEqual([REPLACEABLE_SNAPSHOT_ADDRESS]);
+    expect(result.aliasRepoints).toEqual([REPOINTABLE_ALIAS_ADDRESS]);
+  });
+
+  it("still refuses a plain delete of the build step", () => {
+    expect(codes(planWith([[REPLACEABLE_BUILD_ADDRESS, ["delete"]]]), "initial")).toContain(
+      "delete-action",
+    );
+  });
+
+  it("refuses replacement of a different terraform_data resource", () => {
+    expect(codes(planWith([["terraform_data.something_else", ["delete", "create"]]]), "initial")).toContain(
+      "replace-action",
+    );
+  });
+
+  it("reports zero rebuilds on an ordinary plan", () => {
+    const result = evaluatePlan(initialCreatePlan(), { mode: "initial" });
+    expect(result.buildReplacements).toEqual([]);
     expect(result.ok).toBe(true);
   });
 });

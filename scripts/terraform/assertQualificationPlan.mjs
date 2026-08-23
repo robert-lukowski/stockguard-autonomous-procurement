@@ -107,6 +107,13 @@ export const ARCHITECTURE_A_RESOURCES = Object.freeze([
  * Both are scoped to a single address.
  */
 export const REPLACEABLE_SNAPSHOT_ADDRESS = "aws_lexv2models_bot_version.v1";
+/**
+ * The build step itself is replaced whenever the conversational surface
+ * changes - that IS its lifecycle, and it is what drives the resnapshot above.
+ * It holds no state and touches no durable resource: destroying it destroys
+ * nothing, and recreating it re-runs an idempotent BuildBotLocale.
+ */
+export const REPLACEABLE_BUILD_ADDRESS = "terraform_data.lex_locale_build";
 export const REPOINTABLE_ALIAS_ADDRESS = "awscc_lex_bot_alias.supplier_simulator";
 
 export const FORGETTABLE_STATE_ADDRESS = "awscc_connect_integration_association.lex_bot";
@@ -521,7 +528,18 @@ export function evaluatePlan(plan, { mode }) {
   let lambdaCodeChanged = false;
   const forgottenAddresses = [];
   const snapshotReplacements = [];
+  const buildReplacements = [];
   const aliasRepoints = [];
+
+  // The alias repoint is permitted only alongside the resnapshot that causes
+  // it. Decide that from the whole plan rather than from what the loop below
+  // happens to have seen already, so the verdict cannot depend on the order
+  // Terraform emits resource_changes in.
+  const planHasSnapshotReplacement = (plan.resource_changes ?? []).some(
+    (rc) =>
+      rc?.address === REPLACEABLE_SNAPSHOT_ADDRESS &&
+      classifyActions(rc?.change?.actions) === "replace",
+  );
   let flagUpdates = 0;
   let flagChange = null;
   let flagSource = "planned value";
@@ -585,7 +603,11 @@ export function evaluatePlan(plan, { mode }) {
       forgottenAddresses.push(address);
       continue;
     }
-    if (action === "replace" && address === REPLACEABLE_SNAPSHOT_ADDRESS) {
+    if (action === "replace" && address === REPLACEABLE_BUILD_ADDRESS) {
+      // Rebuilding the locale. Nothing durable is destroyed - the resource
+      // holds no state and the build it re-runs is idempotent.
+      buildReplacements.push(address);
+    } else if (action === "replace" && address === REPLACEABLE_SNAPSHOT_ADDRESS) {
       // A fresh snapshot of a now-built locale. Nothing durable is lost:
       // a version holds no data and create_before_destroy keeps one alive for
       // the alias throughout.
@@ -608,7 +630,7 @@ export function evaluatePlan(plan, { mode }) {
       } else if (
         action === "update" &&
         address === REPOINTABLE_ALIAS_ADDRESS &&
-        snapshotReplacements.length > 0
+        planHasSnapshotReplacement
       ) {
         // The alias follows the new bot version. Permitted only alongside the
         // snapshot replacement that causes it.
@@ -770,6 +792,7 @@ export function evaluatePlan(plan, { mode }) {
     flagSource,
     forgottenAddresses,
     snapshotReplacements,
+    buildReplacements,
     aliasRepoints,
   });
 }
@@ -799,6 +822,7 @@ function finish(plan, mode, violations, simulatorFlag, extra) {
     simulatorFlagSource: extra.flagSource ?? "planned value",
     forgottenAddresses: extra.forgottenAddresses ?? [],
     snapshotReplacements: extra.snapshotReplacements ?? [],
+    buildReplacements: extra.buildReplacements ?? [],
     aliasRepoints: extra.aliasRepoints ?? [],
     recordingResourcesPresent: violations.some(
       (v) => v.code === "forbidden:recording-storage" || v.code === "forbidden:connect-storage-config",
@@ -832,6 +856,7 @@ export function formatReport(result) {
     `  recording resources present  ${yesNo(result.recordingResourcesPresent)}`,
     `  simulator flag read from     ${result.simulatorFlagSource}`,
     `  state entries forgotten      ${result.forgottenAddresses.length} (nothing destroyed)`,
+    `  locale rebuilt               ${result.buildReplacements.length}`,
     `  bot version resnapshotted    ${result.snapshotReplacements.length}`,
     `  alias repointed              ${result.aliasRepoints.length}`,
   ];
