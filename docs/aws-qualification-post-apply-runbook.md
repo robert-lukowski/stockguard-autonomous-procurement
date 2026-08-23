@@ -108,31 +108,36 @@ carries an alias with the same name, resolve that before continuing.
 
 ---
 
-## 5. The Lex association is automatic — verify it
+## 5. Associate the qualification alias with Connect — BEFORE the flow exists
 
-Terraform now owns this. `awscc_connect_integration_association.lex_bot`
-associates the Lex V2 alias with the Connect instance via
-`AWS::Connect::IntegrationAssociation`, and the contact flow `depends_on` it.
+`aws_connect_bot_association` is Lex V1 only
+([#30869](https://github.com/hashicorp/terraform-provider-aws/issues/30869)),
+so this is a manual step. Terraform prints the exact command:
 
-That ordering is not cosmetic: **Amazon Connect validates a flow at creation
-time and rejects one whose Lex alias is not associated with the instance**
-(`InvalidContactFlowException`). While the association was a manual step it
-could not be sequenced against the flow, and every apply failed there.
+```bash
+terraform output -raw manual_connect_association_command
+```
 
-Confirm it landed:
+**Order matters, and getting it wrong has already cost one failed apply.**
+Amazon Connect validates a flow at creation time and rejects one whose Lex
+alias is not associated with the instance, with `InvalidContactFlowException`.
+Because the association is manual, nothing sequences it for you. Run it
+**before** the apply that creates `aws_connect_contact_flow`, and run it again
+whenever the alias id changes — AWSCC mints a new one every time the alias is
+recreated.
+
+The command is idempotent; re-running it for an already-associated alias is
+harmless.
+
+## 6. Verify the association, read-only
 
 ```bash
 aws connect list-bots --region eu-central-1 \
   --instance-id "$AWS_CONNECT_INSTANCE_ID" --lex-version V2 --output table
 ```
 
-The alias from `terraform output -raw lex_bot_alias_arn_associated` must
-appear. If it does not, stop — the flow will have failed to create anyway.
-
-## 6. Verify the runtime, read-only
-
-Re-run the step 2 script. Everything it checks should now be green, and the
-contact flow should exist.
+The alias from `terraform output -raw lex_bot_alias_arn` must appear before you
+apply. If it does not, stop — flow creation will fail.
 
 ## 7. Do NOT assign the +1 number yet
 
