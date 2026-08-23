@@ -36,13 +36,16 @@ const RECOVERY_IMMUTABLE_ATTRIBUTES = Object.freeze([
   "handler",
   "timeout",
   "memory_size",
+  "vpc_config",
+  "file_system_config",
+  "package_type",
+]);
+
+const RECOVERY_PROVIDER_DEFAULT_ATTRIBUTES = Object.freeze([
   "architectures",
   "layers",
-  "vpc_config",
   "kms_key_arn",
-  "file_system_config",
   "image_uri",
-  "package_type",
 ]);
 
 function numericConcurrency(value) {
@@ -99,6 +102,28 @@ function transitionIs(change, before, after) {
 
 function jsonEqual(a, b) {
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function canonicalProviderDefault(key, value) {
+  switch (key) {
+    case "architectures":
+      if (value === undefined || value === null) return ["x86_64"];
+      if (Array.isArray(value) && value.length === 0) return ["x86_64"];
+      return value;
+    case "layers":
+      if (value === undefined || value === null) return [];
+      return value;
+    case "kms_key_arn":
+    case "image_uri":
+      if (value === undefined || value === null || value === "") return null;
+      return value;
+    default:
+      return value;
+  }
+}
+
+function providerDefaultEqual(key, before, after) {
+  return jsonEqual(canonicalProviderDefault(key, before), canonicalProviderDefault(key, after));
 }
 
 /**
@@ -178,6 +203,15 @@ export function evaluateQualificationPolicy(plan, { mode }) {
           code: "recovery-attribute-change",
           address: SIMULATOR_ARMING_ADDRESS,
           detail: `recovery replacement must not change ${key}`,
+        });
+      }
+    }
+    for (const key of RECOVERY_PROVIDER_DEFAULT_ATTRIBUTES) {
+      if (!providerDefaultEqual(key, before?.[key], after?.[key])) {
+        extra.push({
+          code: "recovery-attribute-change",
+          address: SIMULATOR_ARMING_ADDRESS,
+          detail: `recovery replacement must not change ${key} beyond provider-default normalization`,
         });
       }
     }
