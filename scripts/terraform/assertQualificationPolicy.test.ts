@@ -113,17 +113,61 @@ describe("reviewed Lambda recovery policy", () => {
     );
   });
 
-  it("refuses recovery unless the replacement leaves Lambda concurrency at zero", () => {
+  it("refuses recovery unless concurrency is exactly -1 -> 0", () => {
+    for (const [before, after] of [
+      [-1, -1],
+      [2, 0],
+      [0, 0],
+    ] as [number, number][]) {
+      const plan = basePlan(false);
+      const lambda = target(plan, SIMULATOR_ARMING_ADDRESS);
+      lambda.change.actions = ["delete", "create"];
+      lambda.change.before = lambdaAttributes("false", before);
+      lambda.change.after = lambdaAttributes("false", after);
+
+      const result = evaluateQualificationPolicy(plan, { mode: "recovery" });
+      expect(result.ok).toBe(false);
+      expect(result.violations.map((v: { code: string }) => v.code)).toContain(
+        "recovery-concurrency",
+      );
+    }
+  });
+
+  it("refuses recovery if any safety-critical Lambda attribute changes", () => {
     const plan = basePlan(false);
     const lambda = target(plan, SIMULATOR_ARMING_ADDRESS);
     lambda.change.actions = ["delete", "create"];
     lambda.change.before = lambdaAttributes("false", -1);
-    lambda.change.after = lambdaAttributes("false", -1);
+    lambda.change.after = { ...lambdaAttributes("false", 0), timeout: 30 };
 
     const result = evaluateQualificationPolicy(plan, { mode: "recovery" });
     expect(result.ok).toBe(false);
     expect(result.violations.map((v: { code: string }) => v.code)).toContain(
-      "recovery-concurrency",
+      "recovery-attribute-change",
+    );
+  });
+
+  it("refuses recovery if the Lambda environment changes", () => {
+    const plan = basePlan(false);
+    const lambda = target(plan, SIMULATOR_ARMING_ADDRESS);
+    lambda.change.actions = ["delete", "create"];
+    lambda.change.before = lambdaAttributes("false", -1);
+    lambda.change.after = {
+      ...lambdaAttributes("false", 0),
+      environment: [
+        {
+          variables: {
+            ...LAMBDA_ENV,
+            ALLOWED_LEX_ALIAS_NAMES: "qualification,TestBotAlias",
+          },
+        },
+      ],
+    };
+
+    const result = evaluateQualificationPolicy(plan, { mode: "recovery" });
+    expect(result.ok).toBe(false);
+    expect(result.violations.map((v: { code: string }) => v.code)).toContain(
+      "recovery-environment-change",
     );
   });
 
