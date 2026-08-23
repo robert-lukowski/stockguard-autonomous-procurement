@@ -40,25 +40,25 @@ resource "aws_connect_contact_flow" "supplier_simulator" {
         Identifier  = "set-logging"
         Type        = "UpdateFlowLoggingBehavior"
         Parameters  = { FlowLoggingBehavior = "Enabled" }
-        Transitions = { NextAction = "set-recording" }
-      },
-      {
-        Identifier = "set-recording"
-        Type       = "UpdateContactRecordingBehavior"
-        Parameters = {
-          RecordingBehaviorOption    = var.enable_call_recording ? "Enable" : "Disable"
-          RecordingParticipantOption = "Both"
-        }
         Transitions = { NextAction = "set-voice" }
       },
       {
+        # Recording is intentionally omitted from the qualification flow.
+        # With recording disabled there is no need to configure a recording
+        # action at all, and omitting it keeps the flow valid and side-effect
+        # free until recording is explicitly introduced later.
         Identifier = "set-voice"
         Type       = "UpdateContactTextToSpeechVoice"
         Parameters = {
           TextToSpeechEngine = "Neural"
           TextToSpeechVoice  = "Joanna"
         }
-        Transitions = { NextAction = "greet" }
+        Transitions = {
+          NextAction = "greet"
+          Errors = [
+            { ErrorType = "NoMatchingError", NextAction = "error" }
+          ]
+        }
       },
       {
         Identifier = "greet"
@@ -66,7 +66,12 @@ resource "aws_connect_contact_flow" "supplier_simulator" {
         Parameters = {
           Text = "Ridgeline Industrial Supply, sales desk. How can I help?"
         }
-        Transitions = { NextAction = "lex" }
+        Transitions = {
+          NextAction = "lex"
+          Errors = [
+            { ErrorType = "NoMatchingError", NextAction = "error" }
+          ]
+        }
       },
       {
         Identifier = "lex"
@@ -85,16 +90,26 @@ resource "aws_connect_contact_flow" "supplier_simulator" {
         }
       },
       {
-        Identifier  = "goodbye"
-        Type        = "MessageParticipant"
-        Parameters  = { Text = "Thank you for calling. Goodbye." }
-        Transitions = { NextAction = "disconnect" }
+        Identifier = "goodbye"
+        Type       = "MessageParticipant"
+        Parameters = { Text = "Thank you for calling. Goodbye." }
+        Transitions = {
+          NextAction = "disconnect"
+          Errors = [
+            { ErrorType = "NoMatchingError", NextAction = "disconnect" }
+          ]
+        }
       },
       {
-        Identifier  = "error"
-        Type        = "MessageParticipant"
-        Parameters  = { Text = "Sorry, the sales desk is unavailable right now. Goodbye." }
-        Transitions = { NextAction = "disconnect" }
+        Identifier = "error"
+        Type       = "MessageParticipant"
+        Parameters = { Text = "Sorry, the sales desk is unavailable right now. Goodbye." }
+        Transitions = {
+          NextAction = "disconnect"
+          Errors = [
+            { ErrorType = "NoMatchingError", NextAction = "disconnect" }
+          ]
+        }
       },
       {
         Identifier  = "disconnect"
