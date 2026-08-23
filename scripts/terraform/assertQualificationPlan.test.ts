@@ -13,6 +13,8 @@ import {
   readEnvironmentReferences,
   canonicalBoolean,
   FORGETTABLE_STATE_ADDRESS,
+  REPLACEABLE_SNAPSHOT_ADDRESS,
+  REPOINTABLE_ALIAS_ADDRESS,
   // @ts-expect-error - plain .mjs module, deliberately dependency-free
 } from "./assertQualificationPlan.mjs";
 
@@ -1044,6 +1046,60 @@ describe("forgetting a stale state entry", () => {
   it("reports zero forgotten entries on an ordinary plan", () => {
     const result = evaluatePlan(initialCreatePlan(), { mode: "initial" });
     expect(result.forgottenAddresses).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe("resnapshotting the Lex bot version", () => {
+  function planWith(entries: [string, string[]][]) {
+    const plan = initialCreatePlan();
+    for (const [address, actions] of entries) {
+      const existing = plan.resource_changes.find((rc: { address: string }) => rc.address === address);
+      if (existing) existing.change.actions = actions;
+      else plan.resource_changes.push(change(address, actions, {}, {}));
+    }
+    return plan;
+  }
+
+  it("permits replacing the version together with the alias repoint", () => {
+    const plan = planWith([
+      [REPLACEABLE_SNAPSHOT_ADDRESS, ["create", "delete"]],
+      [REPOINTABLE_ALIAS_ADDRESS, ["update"]],
+    ]);
+    const result = evaluatePlan(plan, { mode: "initial" });
+    expect(result.violations).toEqual([]);
+    expect(result.snapshotReplacements).toEqual([REPLACEABLE_SNAPSHOT_ADDRESS]);
+    expect(result.aliasRepoints).toEqual([REPOINTABLE_ALIAS_ADDRESS]);
+  });
+
+  it("refuses the alias update on its own, with no replacement to justify it", () => {
+    // Without the resnapshot there is nothing for the alias to follow, so this
+    // would be an ordinary unexplained update.
+    const found = codes(planWith([[REPOINTABLE_ALIAS_ADDRESS, ["update"]]]), "initial");
+    expect(found).toContain("update-action");
+  });
+
+  it("refuses replacement of any other resource", () => {
+    for (const address of [
+      "aws_lexv2models_bot.supplier_simulator",
+      "aws_lambda_function.supplier_simulator",
+      "aws_connect_contact_flow.supplier_simulator",
+      REPOINTABLE_ALIAS_ADDRESS,
+    ]) {
+      expect(codes(planWith([[address, ["delete", "create"]]]), "initial")).toContain("replace-action");
+    }
+  });
+
+  it("still refuses a plain delete of the version", () => {
+    expect(codes(planWith([[REPLACEABLE_SNAPSHOT_ADDRESS, ["delete"]]]), "initial")).toContain(
+      "delete-action",
+    );
+  });
+
+  it("reports both counts on an ordinary plan as zero", () => {
+    const result = evaluatePlan(initialCreatePlan(), { mode: "initial" });
+    expect(result.snapshotReplacements).toEqual([]);
+    expect(result.aliasRepoints).toEqual([]);
     expect(result.ok).toBe(true);
   });
 });

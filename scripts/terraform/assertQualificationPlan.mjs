@@ -57,6 +57,7 @@ export const ARCHITECTURE_A_RESOURCES = Object.freeze([
   "aws_lexv2models_intent.get_supplier_quote",
   "aws_lexv2models_intent.confirm_commercial_terms",
   "aws_lexv2models_intent.end_conversation",
+  "terraform_data.lex_locale_build",
   "aws_lexv2models_bot_version.v1",
   "awscc_lex_bot_alias.supplier_simulator",
   // The contact flow. The Lex V2 association it is validated against is made
@@ -89,6 +90,25 @@ export const ARCHITECTURE_A_RESOURCES = Object.freeze([
  * Narrow on purpose: one address, and the allowance disappears once the entry
  * is gone.
  */
+/**
+ * Replacing a Lex bot VERSION is how the runtime is corrected, not a loss.
+ *
+ * A version is an immutable snapshot of DRAFT taken at creation. The provider
+ * cannot build a locale (BuildBotLocale is API-only and targets DRAFT), so a
+ * version cut from a NotBuilt draft is permanently NotBuilt and the bot cannot
+ * answer. Version 1 is in exactly that state. The only way to a working bot is
+ * to build DRAFT and cut a NEW version, which is a replacement.
+ *
+ * It destroys nothing durable: a version holds no data, and
+ * create_before_destroy keeps one alive for the alias throughout. The alias
+ * update that follows is the same event seen from the other side, and is
+ * permitted only in a plan that actually contains the replacement.
+ *
+ * Both are scoped to a single address.
+ */
+export const REPLACEABLE_SNAPSHOT_ADDRESS = "aws_lexv2models_bot_version.v1";
+export const REPOINTABLE_ALIAS_ADDRESS = "awscc_lex_bot_alias.supplier_simulator";
+
 export const FORGETTABLE_STATE_ADDRESS = "awscc_connect_integration_association.lex_bot";
 
 export const SIMULATOR_ARMING_ADDRESS = "aws_lambda_function.supplier_simulator";
@@ -500,6 +520,8 @@ export function evaluatePlan(plan, { mode }) {
   let simulatorFlag = null;
   let lambdaCodeChanged = false;
   const forgottenAddresses = [];
+  const snapshotReplacements = [];
+  const aliasRepoints = [];
   let flagUpdates = 0;
   let flagChange = null;
   let flagSource = "planned value";
@@ -563,7 +585,12 @@ export function evaluatePlan(plan, { mode }) {
       forgottenAddresses.push(address);
       continue;
     }
-    if (action === "delete" || action === "replace" || action === "forget") {
+    if (action === "replace" && address === REPLACEABLE_SNAPSHOT_ADDRESS) {
+      // A fresh snapshot of a now-built locale. Nothing durable is lost:
+      // a version holds no data and create_before_destroy keeps one alive for
+      // the alias throughout.
+      snapshotReplacements.push(address);
+    } else if (action === "delete" || action === "replace" || action === "forget") {
       add(
         `${action}-action`,
         address,
@@ -578,6 +605,14 @@ export function evaluatePlan(plan, { mode }) {
       const isFlagUpdate = action === "update" && address === SIMULATOR_ARMING_ADDRESS;
       if (isFlagUpdate) {
         flagUpdates += 1;
+      } else if (
+        action === "update" &&
+        address === REPOINTABLE_ALIAS_ADDRESS &&
+        snapshotReplacements.length > 0
+      ) {
+        // The alias follows the new bot version. Permitted only alongside the
+        // snapshot replacement that causes it.
+        aliasRepoints.push(address);
       } else if (action === "update") {
         add(
           "update-action",
@@ -734,6 +769,8 @@ export function evaluatePlan(plan, { mode }) {
     flagChange,
     flagSource,
     forgottenAddresses,
+    snapshotReplacements,
+    aliasRepoints,
   });
 }
 
@@ -761,6 +798,8 @@ function finish(plan, mode, violations, simulatorFlag, extra) {
     simulatorFlagChange: extra.flagChange ?? null,
     simulatorFlagSource: extra.flagSource ?? "planned value",
     forgottenAddresses: extra.forgottenAddresses ?? [],
+    snapshotReplacements: extra.snapshotReplacements ?? [],
+    aliasRepoints: extra.aliasRepoints ?? [],
     recordingResourcesPresent: violations.some(
       (v) => v.code === "forbidden:recording-storage" || v.code === "forbidden:connect-storage-config",
     ),
@@ -793,6 +832,8 @@ export function formatReport(result) {
     `  recording resources present  ${yesNo(result.recordingResourcesPresent)}`,
     `  simulator flag read from     ${result.simulatorFlagSource}`,
     `  state entries forgotten      ${result.forgottenAddresses.length} (nothing destroyed)`,
+    `  bot version resnapshotted    ${result.snapshotReplacements.length}`,
+    `  alias repointed              ${result.aliasRepoints.length}`,
   ];
   if (result.simulatorFlagChange) {
     lines.push(`  SIMULATOR_ENABLED change     ${result.simulatorFlagChange}`);

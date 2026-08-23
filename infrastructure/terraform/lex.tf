@@ -138,6 +138,56 @@ resource "aws_lexv2models_intent" "end_conversation" {
 # FallbackIntent is built in and always present. The Lambda guard fails closed
 # on anything it does not recognise, so no extra resource is required here.
 
+# ---------------------------------------------------------------------------
+# Build the DRAFT locale.
+#
+# PROVIDER GAP: the aws provider has no way to build a Lex V2 locale. Building
+# is an API-only operation (BuildBotLocale) and it targets DRAFT only.
+#
+# This is not cosmetic. A bot version is an immutable SNAPSHOT of DRAFT taken
+# at creation time, so a version cut from a NotBuilt DRAFT is permanently
+# NotBuilt and the bot cannot answer a call. That is exactly what the first
+# deployment produced, and what the post-apply verification caught:
+#
+#   FAIL  locale en_US on served version 1 is NotBuilt - the bot cannot answer
+#
+# So the build has to happen BETWEEN the intents and the version, which is why
+# it is a provisioner rather than a step in the workflow: only Terraform can
+# sequence it there.
+# ---------------------------------------------------------------------------
+resource "terraform_data" "lex_locale_build" {
+  # Rebuild whenever the conversational surface changes, so a new intent
+  # cannot quietly ship inside an unbuilt locale.
+  triggers_replace = [
+    aws_lexv2models_bot_locale.en.id,
+    aws_lexv2models_intent.get_supplier_quote.id,
+    aws_lexv2models_intent.confirm_commercial_terms.id,
+    aws_lexv2models_intent.end_conversation.id,
+  ]
+
+  provisioner "local-exec" {
+    interpreter = ["/bin/bash", "-c"]
+    command     = <<-EOT
+      set -euo pipefail
+      BOT=${aws_lexv2models_bot.supplier_simulator.id}
+      aws lexv2-models build-bot-locale --region ${var.aws_region} \
+        --bot-id "$BOT" --bot-version DRAFT --locale-id ${local.lex_locale_id} >/dev/null
+      for _ in $(seq 1 60); do
+        STATUS="$(aws lexv2-models describe-bot-locale --region ${var.aws_region} \
+          --bot-id "$BOT" --bot-version DRAFT --locale-id ${local.lex_locale_id} \
+          --query botLocaleStatus --output text)"
+        case "$STATUS" in
+          Built) echo "locale built"; exit 0 ;;
+          Failed) echo "locale build FAILED" >&2; exit 1 ;;
+        esac
+        sleep 5
+      done
+      echo "timed out waiting for the locale build" >&2
+      exit 1
+    EOT
+  }
+}
+
 resource "aws_lexv2models_bot_version" "v1" {
   bot_id = aws_lexv2models_bot.supplier_simulator.id
 
@@ -147,11 +197,15 @@ resource "aws_lexv2models_bot_version" "v1" {
     }
   }
 
-  depends_on = [
-    aws_lexv2models_intent.get_supplier_quote,
-    aws_lexv2models_intent.confirm_commercial_terms,
-    aws_lexv2models_intent.end_conversation,
-  ]
+  # The snapshot must be taken from a BUILT draft, so the build is a hard
+  # dependency and a rebuild forces a fresh version. create_before_destroy
+  # keeps a version alive for the alias while the new one is cut.
+  depends_on = [terraform_data.lex_locale_build]
+
+  lifecycle {
+    replace_triggered_by  = [terraform_data.lex_locale_build]
+    create_before_destroy = true
+  }
 }
 
 # The runtime alias. The Lex TestBotAlias is explicitly NOT used: it always
