@@ -24,8 +24,12 @@ resource "aws_lambda_function" "supplier_simulator" {
   timeout     = 10
   memory_size = 256
 
-  # Bounded blast radius: a runaway loop cannot fan out.
-  reserved_concurrent_executions = 2
+  # The account cannot support a positive reserved-concurrency allocation while
+  # preserving AWS's required unreserved pool. Keep the disabled simulator at
+  # zero concurrency, then deliberately remove that reservation only while the
+  # qualification toggle is armed. SIMULATOR_ENABLED remains the second,
+  # independent fail-closed guard inside the handler.
+  reserved_concurrent_executions = var.simulator_enabled ? -1 : 0
 
   environment {
     variables = {
