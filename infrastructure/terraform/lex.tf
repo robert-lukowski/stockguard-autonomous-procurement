@@ -157,6 +157,14 @@ resource "aws_lexv2models_bot_version" "v1" {
 # The runtime alias. The Lex TestBotAlias is explicitly NOT used: it always
 # tracks DRAFT, so runtime behaviour would change the moment anyone edits the
 # bot in the console.
+# Built by hand rather than read back from the alias, because the alias does
+# not expose its own ARN as an attribute. Referenced by the Connect
+# integration association, the contact flow and the Lambda invoke permission,
+# so it lives in one place.
+locals {
+  lex_bot_alias_arn = "arn:aws:lex:${var.aws_region}:${var.aws_account_id}:bot-alias/${aws_lexv2models_bot.supplier_simulator.id}/${awscc_lex_bot_alias.supplier_simulator.bot_alias_id}"
+}
+
 resource "awscc_lex_bot_alias" "supplier_simulator" {
   bot_id         = aws_lexv2models_bot.supplier_simulator.id
   bot_alias_name = local.lex_alias_name

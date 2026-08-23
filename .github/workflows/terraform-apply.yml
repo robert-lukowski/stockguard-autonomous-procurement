@@ -246,7 +246,7 @@ jobs:
             echo 'Full sequence, including rollback: `docs/aws-qualification-post-apply-runbook.md`'
             echo ''
             echo '1. Capture the CURRENT inbound flow of the existing +1 number in the Connect console, before changing anything'
-            echo '2. `aws connect associate-bot --lex-v2-bot ...` (see the terraform output; provider gap #30869)'
+            echo '2. (none - the Lex V2 association is now created by Terraform)'
             echo '3. Assign the existing +1 number to the new contact flow ONLY when the qualification stage is approved'
             echo '4. Set `simulator_enabled = true` only immediately before a controlled qualification call'
           } >> "$GITHUB_STEP_SUMMARY"

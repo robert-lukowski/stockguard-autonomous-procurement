@@ -55,5 +55,5 @@ resource "aws_lambda_permission" "lex_invoke" {
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.supplier_simulator.function_name
   principal     = "lexv2.amazonaws.com"
-  source_arn    = "arn:aws:lex:${var.aws_region}:${var.aws_account_id}:bot-alias/${aws_lexv2models_bot.supplier_simulator.id}/${awscc_lex_bot_alias.supplier_simulator.bot_alias_id}"
+  source_arn    = local.lex_bot_alias_arn
 }

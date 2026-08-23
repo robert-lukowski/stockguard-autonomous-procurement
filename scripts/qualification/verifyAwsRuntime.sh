@@ -221,13 +221,13 @@ else
   esac
 fi
 
-# Whether the Lex association step has been done yet is reported, not enforced:
-# it is a manual step that follows this verification.
+# The association is created by Terraform, so its absence is a real failure
+# rather than a pending manual step.
 LEX_ASSOC="$(aws connect list-bots --region "$REGION" --instance-id "$INSTANCE_ID" \
   --lex-version V2 --query "LexBots[].LexV2Bot.AliasArn" --output text 2>/dev/null || true)"
 case "$LEX_ASSOC" in
   *"$ALIAS_ID"*) info "the qualification alias IS associated with Connect" ;;
-  *) info "the qualification alias is NOT yet associated with Connect (manual step, see the runbook)" ;;
+  *) fail "the qualification alias is NOT associated with Connect; Terraform should have created that association" ;;
 esac
 
 echo

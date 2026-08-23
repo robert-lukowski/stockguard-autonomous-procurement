@@ -119,9 +119,13 @@ describe("infrastructure safety invariants", () => {
 
   it("still pins the Lambda invoke permission to the real generated alias", () => {
     // Breaking the cycle must not turn into "any Lex alias may invoke us".
+    // The ARN is now built once in lex.tf and referenced, so follow the
+    // indirection rather than accepting any literal.
     const lambda = tf("lambda.tf");
-    expect(lambda).toContain("awscc_lex_bot_alias.supplier_simulator.bot_alias_id");
+    expect(lambda).toContain("source_arn    = local.lex_bot_alias_arn");
     expect(lambda).not.toMatch(/source_arn\s*=\s*"[^"]*bot-alias\/\*/);
+    expect(tf("lex.tf")).toContain("awscc_lex_bot_alias.supplier_simulator.bot_alias_id");
+    expect(tf("lex.tf")).not.toMatch(/lex_bot_alias_arn\s*=\s*"[^"]*bot-alias\/\*/);
   });
 
   it("defers DynamoDB, Secrets Manager and KMS to a later architecture", () => {
@@ -292,6 +296,101 @@ ${variables}
 # SIMULATOR_ENABLED = tostring(var.other_flag)
 ${syntheticLambda(`      SIMULATOR_ENABLED = tostring(var.simulator_enabled)`)}`;
     expect(simulatorEnabledAssignments(decoy)).toEqual([EXPECTED_EXPRESSION]);
+  });
+});
+
+/**
+ * Contact flow structure.
+ *
+ * Amazon Connect validates a flow at CreateContactFlow time, so a malformed or
+ * unassociated flow is not caught until an apply is already half-done. These
+ * checks are static and cheap; the association one is the invariant whose
+ * absence caused InvalidContactFlowException on every apply.
+ */
+describe("connect contact flow", () => {
+  const connect = tf("connect.tf");
+
+  /**
+   * The flow's actions, recovered from the jsonencode() call in connect.tf as
+   * one text chunk each. Splitting on Identifier keeps each action's own
+   * transitions with it, so a catch-all belonging to a different action cannot
+   * satisfy the check below.
+   *
+   * `\bType` deliberately does not match ErrorType.
+   */
+  function flowActions(): { identifier: string; type: string; body: string }[] {
+    return connect
+      .split(/Identifier\s*=\s*"/)
+      .slice(1)
+      .map((chunk) => ({
+        identifier: chunk.slice(0, chunk.indexOf('"')),
+        type: /\bType\s*=\s*"([^"]+)"/.exec(chunk)?.[1] ?? "",
+        body: chunk,
+      }));
+  }
+
+  it("creates the Lex V2 association and orders the flow after it", () => {
+    // Connect rejects a flow whose Lex alias is not associated with the
+    // instance. Terraform must own that edge; a runbook step cannot.
+    expect(connect).toContain('resource "awscc_connect_integration_association" "lex_bot"');
+    expect(connect).toContain('integration_type = "LEX_BOT"');
+    expect(connect).toContain("depends_on = [awscc_connect_integration_association.lex_bot]");
+  });
+
+  it("associates the same alias ARN the flow routes to", () => {
+    // Two different ARNs here would associate one alias and route to another,
+    // which fails exactly the same way and is far harder to see.
+    const arnUses = connect.match(/local\.lex_bot_alias_arn/g) ?? [];
+    expect(arnUses.length).toBe(2);
+    expect(tf("lex.tf")).toMatch(/locals\s*\{[\s\S]*?lex_bot_alias_arn\s*=/);
+  });
+
+  it("parses the real actions, so the checks below are not vacuous", () => {
+    const types = flowActions().map((a) => a.type);
+    expect(types).toEqual([
+      "UpdateFlowLoggingBehavior",
+      "ConnectParticipantWithLexBot",
+      "DisconnectParticipant",
+    ]);
+  });
+
+  it("routes every NextAction to an identifier that exists", () => {
+    const declared = new Set(flowActions().map((a) => a.identifier));
+    expect(declared.size).toBeGreaterThan(0);
+    for (const [, target] of connect.matchAll(/NextAction\s*=\s*"([^"]+)"/g)) {
+      expect([...declared]).toContain(target);
+    }
+  });
+
+  it("starts at a declared action", () => {
+    const start = /StartAction\s*=\s*"([^"]+)"/.exec(connect)?.[1];
+    expect(start).toBeTruthy();
+    expect(flowActions().map((a) => a.identifier)).toContain(start);
+  });
+
+  it("defines NoMatchingError wherever the flow language requires it", () => {
+    // UpdateFlowLoggingBehavior has no error surface and DisconnectParticipant
+    // is terminal. Every other action must define the catch-all, or Connect
+    // rejects the whole flow.
+    const needsCatchAll = flowActions().filter(
+      (a) => !["UpdateFlowLoggingBehavior", "DisconnectParticipant"].includes(a.type),
+    );
+    expect(needsCatchAll.length).toBeGreaterThan(0);
+    for (const action of needsCatchAll) {
+      expect(action.body).toContain("NoMatchingError");
+    }
+  });
+
+  it("keeps the flow minimal and free of recording controls", () => {
+    // Recording stays out until enable_call_recording is deliberately turned
+    // on, and a recording action in the flow would contradict that.
+    expect(connect).not.toContain("UpdateContactRecordingBehavior");
+    expect(flowActions().length).toBeLessThanOrEqual(4);
+  });
+
+  it("never assigns a telephone number", () => {
+    expect(connect).not.toContain("phone_number");
+    expect(connect).not.toContain("aws_connect_phone_number");
   });
 });
 
