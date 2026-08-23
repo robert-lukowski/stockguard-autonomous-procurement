@@ -3,6 +3,7 @@ export { ProcurementWorkflow } from "./ProcurementWorkflow";
 export { appendWorkflowState, ProcurementStateMachine } from "./stateMachine";
 export {
   defaultCallExecutionPolicy,
+  POLL_BUDGET_CEILING_MS,
   InMemoryWorkflowRunStore,
   WebhookDeduplicator,
   withTimeout,

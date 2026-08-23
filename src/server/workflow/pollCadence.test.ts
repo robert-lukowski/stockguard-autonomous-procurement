@@ -8,6 +8,7 @@ import {
   MockPurchaseOrderAdapter,
   ProcurementWorkflow,
   defaultCallExecutionPolicy,
+  POLL_BUDGET_CEILING_MS,
   type SupplierContact,
   type WorkflowInput,
 } from ".";
@@ -108,7 +109,13 @@ function workflowWith(
 describe("supplier call poll cadence", () => {
   it("waits between non-terminal polls instead of exhausting the budget instantly", async () => {
     const { waits, sleep } = recordingSleep();
-    const { workflow, base } = workflowWith(task("queued"), sleep);
+    // Spacing is what this test is about, so it pins maximumPolls itself rather
+    // than inheriting the default budget.
+    const { workflow, base } = workflowWith(task("queued"), sleep, {
+      ...defaultCallExecutionPolicy,
+      maximumAttempts: 1,
+      maximumPolls: 3,
+    });
 
     await workflow.run(base);
 
@@ -145,12 +152,25 @@ describe("supplier call poll cadence", () => {
     );
   });
 
-  it("does not silently enlarge the retry budget", () => {
-    // Guards against a future edit quietly buying more real phone calls.
+  it("does not silently enlarge the budget that buys real phone calls", () => {
+    // maximumAttempts is the one that costs money and rings a real handset.
+    // maximumPolls only reads status over HTTP, so it is allowed to be large -
+    // but the spacing must stay non-zero or the budget means nothing.
     expect(defaultCallExecutionPolicy.maximumAttempts).toBe(2);
-    expect(defaultCallExecutionPolicy.maximumPolls).toBe(3);
     expect(defaultCallExecutionPolicy.pollIntervalMs).toBeGreaterThan(0);
     expect(defaultCallExecutionPolicy.initialPollDelayMs).toBeGreaterThan(0);
+  });
+
+  it("waits long enough for a real conversation to finish", () => {
+    // At 3 polls the ceiling was ~25s, so a call that actually succeeded was
+    // still recorded as TIMEOUT. The budget must cover a real call.
+    const ceiling =
+      defaultCallExecutionPolicy.initialPollDelayMs +
+      (defaultCallExecutionPolicy.maximumPolls - 1) *
+        defaultCallExecutionPolicy.pollIntervalMs;
+
+    expect(ceiling).toBe(POLL_BUDGET_CEILING_MS);
+    expect(ceiling).toBe(300_000);
   });
 
   it("stops polling when the run is cancelled mid-wait", async () => {

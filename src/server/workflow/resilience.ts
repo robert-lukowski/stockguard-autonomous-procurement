@@ -25,16 +25,30 @@ export type CallExecutionPolicy = {
  * and nothing in this repository has yet observed real call timing. Re-derive
  * them from measured behaviour once a real call has been completed.
  *
- * `maximumAttempts` and `maximumPolls` are deliberately unchanged: this fixes
- * the spacing of the existing budget, it does not enlarge it.
+ * `maximumAttempts` stays at 2. That is the budget that buys REAL PHONE CALLS
+ * and it is the one that must never grow quietly.
+ *
+ * `maximumPolls` is a different kind of budget: status reads over HTTP, which
+ * cost nothing and place no call. At 3 it capped the wait at ~25 seconds, far
+ * less than a real conversation takes, so a call that succeeded would still be
+ * recorded as TIMEOUT. It now spans five minutes:
+ *
+ *   initialPollDelayMs + (maximumPolls - 1) * pollIntervalMs
+ *   = 15s + 57 * 5s = 300s
+ *
+ * Five minutes is a ceiling, not a wait: the loop exits the moment the task
+ * reaches a terminal state, so a fast call still returns fast.
  */
 export const defaultCallExecutionPolicy: CallExecutionPolicy = {
   maximumAttempts: 2,
-  maximumPolls: 3,
+  maximumPolls: 58,
   timeoutMs: 10_000,
   pollIntervalMs: 5_000,
   initialPollDelayMs: 15_000,
 };
+
+/** The wall-clock ceiling the poll budget above is chosen to cover. */
+export const POLL_BUDGET_CEILING_MS = 300_000;
 
 /** Injected so tests never wait on real time. */
 export type Sleep = (ms: number) => Promise<void>;
