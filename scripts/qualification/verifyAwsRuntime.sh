@@ -73,7 +73,17 @@ print("" if entry is None else entry.get("value", ""))
 
 jget() { python3 -c '
 import json,sys
-value = json.load(sys.stdin)
+raw = sys.stdin.read().strip()
+if not raw:
+    # An API that legitimately returns nothing (an absent concurrency
+    # reservation, for one) must read as "no value", not crash the run.
+    print("")
+    sys.exit(0)
+try:
+    value = json.loads(raw)
+except json.JSONDecodeError:
+    print("")
+    sys.exit(0)
 for key in sys.argv[1:]:
     if value is None:
         break
@@ -126,19 +136,27 @@ if LAMBDA_CFG="$(aws lambda get-function-configuration --region "$REGION" --func
   #               impossible here.
   # The old 1-10 bound predates that design and failed a correctly disarmed
   # deployment.
-  RESERVED="$(aws lambda get-function-concurrency --region "$REGION" --function-name "$FUNCTION_NAME" 2>/dev/null | jget ReservedConcurrentExecutions)"
-  if [ "$EXPECT_SIMULATOR" = "false" ]; then
-    if [ "$RESERVED" = "0" ]; then
-      pass "reserved concurrency is 0 - the function cannot be invoked while disarmed"
+  # An absent reservation and a FAILED read both look like an empty string, and
+  # while armed the absent case is a PASS - so a failed read must never reach
+  # that branch or it would pass without having verified anything. Keep the
+  # call's exit status and treat a failure as a failure.
+  if CONCURRENCY_JSON="$(aws lambda get-function-concurrency --region "$REGION" --function-name "$FUNCTION_NAME" 2>/dev/null)"; then
+    RESERVED="$(printf '%s' "$CONCURRENCY_JSON" | jget ReservedConcurrentExecutions)"
+    if [ "$EXPECT_SIMULATOR" = "false" ]; then
+      if [ "$RESERVED" = "0" ]; then
+        pass "reserved concurrency is 0 - the function cannot be invoked while disarmed"
+      else
+        fail "reserved concurrency is '${RESERVED:-unset}' but a disarmed deployment must reserve 0"
+      fi
     else
-      fail "reserved concurrency is '${RESERVED:-unset}' but a disarmed deployment must reserve 0"
+      if [ -z "$RESERVED" ]; then
+        pass "no reservation while armed, as configured"
+      else
+        fail "reserved concurrency is ${RESERVED} but an armed deployment expects no reservation"
+      fi
     fi
   else
-    if [ -z "$RESERVED" ]; then
-      pass "no reservation while armed, as configured"
-    else
-      fail "reserved concurrency is ${RESERVED} but an armed deployment expects no reservation"
-    fi
+    fail "could not read reserved concurrency - the disarm state is UNVERIFIED"
   fi
 
   # Lex must be permitted to invoke; nothing else should be.
