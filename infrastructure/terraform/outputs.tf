@@ -28,17 +28,13 @@ output "simulator_enabled" {
   description = "False means the supplier will refuse every turn, whatever else is deployed."
 }
 
-output "manual_connect_association_command" {
+output "lex_bot_alias_arn_associated" {
   description = <<-EOT
-    Terraform gap: aws_connect_bot_association is Lex V1 only
-    (hashicorp/terraform-provider-aws#30869). Run this once, manually, during
-    the approved deployment. It is idempotent.
+    The Lex V2 alias that Terraform associated with the Connect instance via
+    AWS::Connect::IntegrationAssociation. Amazon Connect validates a flow
+    against this association at creation time, so it is no longer a manual
+    step; this output exists to make the association verifiable by eye.
   EOT
 
-  value = join(" ", [
-    "aws connect associate-bot",
-    "--region ${var.aws_region}",
-    "--instance-id ${var.connect_instance_id}",
-    "--lex-v2-bot AliasArn=arn:aws:lex:${var.aws_region}:${var.aws_account_id}:bot-alias/${aws_lexv2models_bot.supplier_simulator.id}/${awscc_lex_bot_alias.supplier_simulator.bot_alias_id}",
-  ])
+  value = local.lex_bot_alias_arn
 }

@@ -9,7 +9,6 @@ plan review cannot protect you from:
 
 | Manual step | Why it is not in Terraform |
 |---|---|
-| Connect ↔ Lex V2 association | `aws_connect_bot_association` is Lex V1 only ([#30869](https://github.com/hashicorp/terraform-provider-aws/issues/30869)) |
 | +1 number → contact flow | Reassigning the number takes an existing number away from whatever answers it today |
 | Arming the simulator | Making a machine answer a phone call is a decision, not a deployment detail |
 
@@ -109,37 +108,31 @@ carries an alias with the same name, resolve that before continuing.
 
 ---
 
-## 5. Associate the qualification alias with Connect
+## 5. The Lex association is automatic — verify it
 
-The provider gap makes this a one-off CLI step. Terraform prints the exact
-command, already filled in:
+Terraform now owns this. `awscc_connect_integration_association.lex_bot`
+associates the Lex V2 alias with the Connect instance via
+`AWS::Connect::IntegrationAssociation`, and the contact flow `depends_on` it.
 
-```bash
-terraform output -raw manual_connect_association_command
-```
+That ordering is not cosmetic: **Amazon Connect validates a flow at creation
+time and rejects one whose Lex alias is not associated with the instance**
+(`InvalidContactFlowException`). While the association was a manual step it
+could not be sequenced against the flow, and every apply failed there.
 
-Run what it prints. It is idempotent. It grants Connect permission to invoke
-the alias; it does not route any call to it and does not change the phone
-number.
-
----
-
-## 6. Verify the association, read-only
+Confirm it landed:
 
 ```bash
 aws connect list-bots --region eu-central-1 \
   --instance-id "$AWS_CONNECT_INSTANCE_ID" --lex-version V2 --output table
 ```
 
-The qualification alias ARN must now appear alongside whatever was already
-there. Re-running the step 2 script will also report the association as present.
+The alias from `terraform output -raw lex_bot_alias_arn_associated` must
+appear. If it does not, stop — the flow will have failed to create anyway.
 
-**Stop here** unless the qualification stage is explicitly approved. At this
-point the runtime is fully deployed, fully verified, connected to Lex — and
-answers no telephone number, with a supplier that refuses every turn. That is a
-deliberate resting state, and it is safe to leave indefinitely.
+## 6. Verify the runtime, read-only
 
----
+Re-run the step 2 script. Everything it checks should now be green, and the
+contact flow should exist.
 
 ## 7. Do NOT assign the +1 number yet
 
