@@ -95,6 +95,55 @@ describe("reviewed Lambda recovery policy", () => {
     expect(result.simulatorEnabled).toBe("false");
   });
 
+  it("accepts only the observed provider-default shape normalization", () => {
+    const plan = basePlan(false);
+    const lambda = target(plan, SIMULATOR_ARMING_ADDRESS);
+    lambda.change.actions = ["delete", "create"];
+    lambda.change.before = {
+      ...lambdaAttributes("false", -1),
+      architectures: null,
+      layers: null,
+      kms_key_arn: null,
+      image_uri: null,
+    };
+    lambda.change.after = {
+      ...lambdaAttributes("false", 0),
+      architectures: ["x86_64"],
+      layers: [],
+      kms_key_arn: "",
+      image_uri: "",
+    };
+
+    const result = evaluateQualificationPolicy(plan, { mode: "recovery" });
+    expect(result.violations).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it.each([
+    ["architectures", ["x86_64"], ["arm64"]],
+    ["layers", [], ["arn:aws:lambda:eu-central-1:000000000000:layer:unexpected:1"]],
+    ["kms_key_arn", null, "arn:aws:kms:eu-central-1:000000000000:key/unexpected"],
+    ["image_uri", null, "000000000000.dkr.ecr.eu-central-1.amazonaws.com/unexpected:latest"],
+  ])("refuses a real recovery change to %s", (attribute, beforeValue, afterValue) => {
+    const plan = basePlan(false);
+    const lambda = target(plan, SIMULATOR_ARMING_ADDRESS);
+    lambda.change.actions = ["delete", "create"];
+    lambda.change.before = {
+      ...lambdaAttributes("false", -1),
+      [attribute]: beforeValue,
+    };
+    lambda.change.after = {
+      ...lambdaAttributes("false", 0),
+      [attribute]: afterValue,
+    };
+
+    const result = evaluateQualificationPolicy(plan, { mode: "recovery" });
+    expect(result.ok).toBe(false);
+    expect(result.violations.map((v: { code: string }) => v.code)).toContain(
+      "recovery-attribute-change",
+    );
+  });
+
   it("refuses recovery when any second resource is replaced", () => {
     const plan = basePlan(false);
     const lambda = target(plan, SIMULATOR_ARMING_ADDRESS);
