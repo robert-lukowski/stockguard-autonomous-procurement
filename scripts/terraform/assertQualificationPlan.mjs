@@ -59,9 +59,9 @@ export const ARCHITECTURE_A_RESOURCES = Object.freeze([
   "aws_lexv2models_intent.end_conversation",
   "aws_lexv2models_bot_version.v1",
   "awscc_lex_bot_alias.supplier_simulator",
-  // The contact flow. The Lex V2 association it is validated against is made
-  // manually, so it is not a Terraform resource. The existing +1 number is
-  // NOT assigned to the flow by Terraform.
+  // Connect: the Lex V2 association the flow is validated against, then the
+  // flow itself. The existing +1 number is NOT assigned to it by Terraform.
+  "awscc_connect_integration_association.lex_bot",
   "aws_connect_contact_flow.supplier_simulator",
 ]);
 
