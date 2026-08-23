@@ -159,6 +159,12 @@ resource "terraform_data" "lex_locale_build" {
   # Rebuild whenever the conversational surface changes, so a new intent
   # cannot quietly ship inside an unbuilt locale.
   triggers_replace = [
+    # Generation counter. replace_triggered_by fires when this resource is
+    # REPLACED, not when it is first created, so the apply that introduced the
+    # build left version 1 - cut from an unbuilt draft - still serving. Bumping
+    # this replaces the build, which cuts a fresh version from a built draft.
+    # Bump again only to force the same sequence by hand.
+    "generation-2",
     aws_lexv2models_bot_locale.en.id,
     aws_lexv2models_intent.get_supplier_quote.id,
     aws_lexv2models_intent.confirm_commercial_terms.id,
