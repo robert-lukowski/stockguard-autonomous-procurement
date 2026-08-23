@@ -82,6 +82,15 @@ resource "aws_lexv2models_bot_locale" "en" {
 # Architecture A needs no slots: there is one fixed profile and no routing code
 # to capture. The handler's `qualificationRfqId` entry mode supplies the RFQ.
 
+# SERVICE-POPULATED SETTINGS
+#
+# Every intent below ignores initial_response_setting and the nested
+# post_fulfillment_status_specification. Neither is declared in this file.
+# BuildBotLocale fills them in with service defaults, refresh reads them into
+# state, and Terraform then wants to remove settings it never created - a diff
+# that never converges, because the next build puts them straight back. What
+# keeps the simulator disarmed is the Lambda's reserved concurrency and
+# SIMULATOR_ENABLED, not these conversation-routing defaults.
 resource "aws_lexv2models_intent" "get_supplier_quote" {
   bot_id      = aws_lexv2models_bot.supplier_simulator.id
   bot_version = aws_lexv2models_bot_locale.en.bot_version
@@ -100,6 +109,17 @@ resource "aws_lexv2models_intent" "get_supplier_quote" {
   fulfillment_code_hook {
     enabled = true
   }
+
+  # BuildBotLocale materialises the service defaults for these two settings,
+  # refresh reads them back, and Terraform then plans to strip them - which the
+  # next build would only re-add. Neither is declared here, so Terraform does
+  # not own either one. See the note above aws_lexv2models_intent.
+  lifecycle {
+    ignore_changes = [
+      initial_response_setting,
+      fulfillment_code_hook[0].post_fulfillment_status_specification,
+    ]
+  }
 }
 
 resource "aws_lexv2models_intent" "confirm_commercial_terms" {
@@ -117,6 +137,13 @@ resource "aws_lexv2models_intent" "confirm_commercial_terms" {
   fulfillment_code_hook {
     enabled = true
   }
+
+  lifecycle {
+    ignore_changes = [
+      initial_response_setting,
+      fulfillment_code_hook[0].post_fulfillment_status_specification,
+    ]
+  }
 }
 
 resource "aws_lexv2models_intent" "end_conversation" {
@@ -132,6 +159,13 @@ resource "aws_lexv2models_intent" "end_conversation" {
 
   fulfillment_code_hook {
     enabled = true
+  }
+
+  lifecycle {
+    ignore_changes = [
+      initial_response_setting,
+      fulfillment_code_hook[0].post_fulfillment_status_specification,
+    ]
   }
 }
 

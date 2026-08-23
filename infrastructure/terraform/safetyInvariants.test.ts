@@ -399,6 +399,37 @@ describe("connect contact flow", () => {
   });
 });
 
+describe("Lex intents do not fight the service over its own defaults", () => {
+  // BuildBotLocale materialises these two settings, refresh reads them back,
+  // and Terraform then plans to strip settings it never declared - a diff the
+  // next build re-creates. Dropping either ignore_changes entry reintroduces a
+  // plan that can never converge, so pin all three intents.
+  const intents = ["get_supplier_quote", "confirm_commercial_terms", "end_conversation"];
+
+  function intentBlock(name: string): string {
+    const source = tf("lex.tf");
+    const start = source.indexOf(`resource "aws_lexv2models_intent" "${name}"`);
+    expect(start).toBeGreaterThan(-1);
+    const next = source.indexOf('resource "aws_lexv2models_intent"', start + 1);
+    const end = source.indexOf("\n# FallbackIntent", start);
+    const stop = next === -1 ? (end === -1 ? source.length : end) : next;
+    return source.slice(start, stop);
+  }
+
+  it.each(intents)("%s ignores both service-populated settings", (name) => {
+    const block = intentBlock(name);
+    expect(block).toMatch(/lifecycle\s*\{[\s\S]*ignore_changes\s*=\s*\[/);
+    expect(block).toContain("initial_response_setting");
+    expect(block).toContain("fulfillment_code_hook[0].post_fulfillment_status_specification");
+  });
+
+  it.each(intents)("%s still declares the fulfillment code hook it does own", (name) => {
+    // ignore_changes must not be widened to the whole block: enabling the code
+    // hook is this file's decision, not the service's.
+    expect(intentBlock(name)).toMatch(/fulfillment_code_hook\s*\{\s*enabled\s*=\s*true/);
+  });
+});
+
 describe("workflow safety invariants", () => {
   const plan = repoFile(".github", "workflows", "terraform-plan.yml");
   const apply = repoFile(".github", "workflows", "terraform-apply.yml");
