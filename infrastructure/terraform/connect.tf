@@ -11,31 +11,27 @@
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# Lex V2 association — the reason CreateContactFlow was failing.
-#
-# Amazon Connect VALIDATES a flow at creation time. A flow referencing a Lex
-# bot alias that is not associated with the instance is rejected outright with
-# InvalidContactFlowException, which is what every apply hit: Terraform created
-# the alias and the flow in the same run, with the association sitting outside
-# Terraform as a manual `aws connect associate-bot` step. Even when that step
-# had been run by hand, it had been run against a PREVIOUS alias id — AWSCC
-# mints a new one whenever the alias is recreated — so at CreateContactFlow
-# time the current alias was still unassociated.
+# Lex V2 association: STILL MANUAL, and still a known ordering hole.
 #
 # `aws_connect_bot_association` is Lex V1 only
-# (hashicorp/terraform-provider-aws#30869), which is why the step was manual.
-# But AWS::Connect::IntegrationAssociation accepts a Lex V2 bot-alias ARN under
-# IntegrationType LEX_BOT, so the awscc provider ALREADY IN THIS STACK closes
-# the gap. That removes the manual step rather than adding machinery, and it
-# makes the ordering a dependency edge Terraform enforces instead of a runbook
-# instruction someone has to remember.
+# (hashicorp/terraform-provider-aws#30869), so the association is performed
+# once by hand with the command in outputs.tf.
+#
+# AWS::Connect::IntegrationAssociation does accept a Lex V2 bot-alias ARN under
+# IntegrationType LEX_BOT, and managing it here via the awscc provider was
+# tried. It failed: the association already exists in the instance, created by
+# that manual step, and Cloud Control returns AlreadyExists rather than
+# adopting it. Importing it is the correct fix and is deliberately deferred -
+# see the ordering hazard below.
+#
+# ORDERING HAZARD, because it will bite again:
+#   Amazon Connect validates a flow at CreateContactFlow time and rejects one
+#   whose Lex alias is not associated with the instance. While the association
+#   is manual, Terraform cannot sequence it against this flow. So whenever the
+#   alias is recreated - AWSCC mints a new id each time - the association must
+#   be re-run by hand BEFORE the next apply, or flow creation fails with
+#   InvalidContactFlowException.
 # ---------------------------------------------------------------------------
-resource "awscc_connect_integration_association" "lex_bot" {
-  # This property takes the instance ARN, not the bare instance id.
-  instance_id      = local.connect_instance_arn
-  integration_arn  = local.lex_bot_alias_arn
-  integration_type = "LEX_BOT"
-}
 
 # ---------------------------------------------------------------------------
 # The contact flow: the smallest thing that proves the vertical slice
@@ -103,9 +99,4 @@ resource "aws_connect_contact_flow" "supplier_simulator" {
       },
     ]
   })
-
-  # The alias ARN is already a reference, so Terraform orders the flow after
-  # the alias. This edge adds the association, which the flow does not
-  # reference but which AWS requires to exist before it will accept the flow.
-  depends_on = [awscc_connect_integration_association.lex_bot]
 }

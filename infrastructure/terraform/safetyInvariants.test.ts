@@ -329,20 +329,25 @@ describe("connect contact flow", () => {
       }));
   }
 
-  it("creates the Lex V2 association and orders the flow after it", () => {
-    // Connect rejects a flow whose Lex alias is not associated with the
-    // instance. Terraform must own that edge; a runbook step cannot.
-    expect(connect).toContain('resource "awscc_connect_integration_association" "lex_bot"');
-    expect(connect).toContain('integration_type = "LEX_BOT"');
-    expect(connect).toContain("depends_on = [awscc_connect_integration_association.lex_bot]");
+  it("routes to the one shared alias ARN, never a hand-built literal", () => {
+    // The flow, the Lambda invoke permission and the manual association
+    // command must all name the same alias. Rebuilding the ARN by hand in any
+    // of them is how they drift apart, and a flow routed at a different alias
+    // than the one associated fails in exactly the same way.
+    expect(connect).toContain("AliasArn = local.lex_bot_alias_arn");
+    expect(connect).not.toMatch(/AliasArn\s*=\s*"arn:aws:lex:/);
+    expect(tf("lex.tf")).toMatch(/locals\s*\{[\s\S]*?lex_bot_alias_arn\s*=/);
+    expect(tf("outputs.tf")).toContain("local.lex_bot_alias_arn");
   });
 
-  it("associates the same alias ARN the flow routes to", () => {
-    // Two different ARNs here would associate one alias and route to another,
-    // which fails exactly the same way and is far harder to see.
-    const arnUses = connect.match(/local\.lex_bot_alias_arn/g) ?? [];
-    expect(arnUses.length).toBe(2);
-    expect(tf("lex.tf")).toMatch(/locals\s*\{[\s\S]*?lex_bot_alias_arn\s*=/);
+  it("documents the manual association as an ordering hazard", () => {
+    // The association is not a Terraform resource, so nothing enforces that it
+    // happens before the flow is created. That has already cost one failed
+    // apply; the reason has to stay written down next to the flow.
+    expect(connect).toContain("ORDERING HAZARD");
+    expect(connect).toContain("InvalidContactFlowException");
+    expect(connect).not.toContain('resource "awscc_connect_integration_association"');
+    expect(tf("outputs.tf")).toContain("manual_connect_association_command");
   });
 
   it("parses the real actions, so the checks below are not vacuous", () => {
