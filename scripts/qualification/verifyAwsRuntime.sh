@@ -221,13 +221,13 @@ else
   esac
 fi
 
-# The association is created by Terraform, so its absence is a real failure
-# rather than a pending manual step.
+# The association is manual, but by the time this script runs it must exist:
+# the contact flow cannot have been created without it.
 LEX_ASSOC="$(aws connect list-bots --region "$REGION" --instance-id "$INSTANCE_ID" \
   --lex-version V2 --query "LexBots[].LexV2Bot.AliasArn" --output text 2>/dev/null || true)"
 case "$LEX_ASSOC" in
   *"$ALIAS_ID"*) info "the qualification alias IS associated with Connect" ;;
-  *) fail "the qualification alias is NOT associated with Connect; Terraform should have created that association" ;;
+  *) fail "the qualification alias is NOT associated with Connect - run the manual association command from the runbook BEFORE creating the flow" ;;
 esac
 
 echo

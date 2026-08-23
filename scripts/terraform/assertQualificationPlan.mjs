@@ -59,9 +59,9 @@ export const ARCHITECTURE_A_RESOURCES = Object.freeze([
   "aws_lexv2models_intent.end_conversation",
   "aws_lexv2models_bot_version.v1",
   "awscc_lex_bot_alias.supplier_simulator",
-  // Connect: the Lex V2 association the flow is validated against, then the
-  // flow itself. The existing +1 number is NOT assigned to it by Terraform.
-  "awscc_connect_integration_association.lex_bot",
+  // The contact flow. The Lex V2 association it is validated against is made
+  // manually, so it is not a Terraform resource. The existing +1 number is
+  // NOT assigned to the flow by Terraform.
   "aws_connect_contact_flow.supplier_simulator",
 ]);
 
@@ -70,6 +70,27 @@ export const ARCHITECTURE_A_RESOURCES = Object.freeze([
  * `var.simulator_enabled` is referenced in exactly one place in the whole
  * configuration: SIMULATOR_ENABLED in this function's environment block.
  */
+/**
+ * The single address a `removed` block may drop from state.
+ *
+ * `forget` is not a destructive action: it deletes a STATE ENTRY and leaves
+ * the real resource untouched. That is precisely its semantics, and it is why
+ * the plan JSON distinguishes it from `delete` - Terraform emits `delete` when
+ * a removed block omits `destroy = false`, and `forget` only when it is set.
+ * So seeing `forget` in the plan is itself the proof that nothing is destroyed.
+ *
+ * This exists because the Connect Lex association ended up in state with
+ * attributes that do not match the configuration, from an apply that failed
+ * midway. Every property of that resource is create-only, so re-declaring it
+ * plans a REPLACE, which would destroy the live association the contact flow
+ * is validated against. Forgetting the stale entry is the only way out that
+ * does not touch AWS.
+ *
+ * Narrow on purpose: one address, and the allowance disappears once the entry
+ * is gone.
+ */
+export const FORGETTABLE_STATE_ADDRESS = "awscc_connect_integration_association.lex_bot";
+
 export const SIMULATOR_ARMING_ADDRESS = "aws_lambda_function.supplier_simulator";
 
 export const EXPECTED_LAMBDA_RUNTIME = "nodejs22.x";
@@ -478,6 +499,7 @@ export function evaluatePlan(plan, { mode }) {
   const present = [];
   let simulatorFlag = null;
   let lambdaCodeChanged = false;
+  const forgottenAddresses = [];
   let flagUpdates = 0;
   let flagChange = null;
   let flagSource = "planned value";
@@ -534,6 +556,13 @@ export function evaluatePlan(plan, { mode }) {
 
     // 2a. Destructive actions, checked before anything else so that a delete
     //     of an ALLOWED resource is still a violation.
+    if (action === "forget" && address === FORGETTABLE_STATE_ADDRESS) {
+      // State-only. The live resource is deliberately left in place, and an
+      // entry leaving state is not subject to the allowlist that governs what
+      // Terraform manages - by definition it is ceasing to be managed.
+      forgottenAddresses.push(address);
+      continue;
+    }
     if (action === "delete" || action === "replace" || action === "forget") {
       add(
         `${action}-action`,
@@ -704,6 +733,7 @@ export function evaluatePlan(plan, { mode }) {
     declaredRecording,
     flagChange,
     flagSource,
+    forgottenAddresses,
   });
 }
 
@@ -730,6 +760,7 @@ function finish(plan, mode, violations, simulatorFlag, extra) {
     lambdaCodeChanged: Boolean(extra.lambdaCodeChanged),
     simulatorFlagChange: extra.flagChange ?? null,
     simulatorFlagSource: extra.flagSource ?? "planned value",
+    forgottenAddresses: extra.forgottenAddresses ?? [],
     recordingResourcesPresent: violations.some(
       (v) => v.code === "forbidden:recording-storage" || v.code === "forbidden:connect-storage-config",
     ),
@@ -761,6 +792,7 @@ export function formatReport(result) {
     `  simulator armed              ${result.simulatorEnabled === "true" ? "yes" : result.simulatorEnabled === "false" ? "no" : `undetermined (${result.simulatorEnabled})`}`,
     `  recording resources present  ${yesNo(result.recordingResourcesPresent)}`,
     `  simulator flag read from     ${result.simulatorFlagSource}`,
+    `  state entries forgotten      ${result.forgottenAddresses.length} (nothing destroyed)`,
   ];
   if (result.simulatorFlagChange) {
     lines.push(`  SIMULATOR_ENABLED change     ${result.simulatorFlagChange}`);

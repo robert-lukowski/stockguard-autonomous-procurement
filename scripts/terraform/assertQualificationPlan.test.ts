@@ -12,6 +12,7 @@ import {
   normalizeReference,
   readEnvironmentReferences,
   canonicalBoolean,
+  FORGETTABLE_STATE_ADDRESS,
   // @ts-expect-error - plain .mjs module, deliberately dependency-free
 } from "./assertQualificationPlan.mjs";
 
@@ -983,6 +984,67 @@ describe("the unknown-environment shape a real create plan produces", () => {
       state: "found",
       references: REAL_REFERENCES,
     });
+  });
+});
+
+describe("forgetting a stale state entry", () => {
+  /**
+   * `forget` removes a STATE ENTRY and leaves the real resource alone. It is
+   * the only way out of a state record that no longer matches its resource,
+   * which is where the Connect Lex association ended up after a half-finished
+   * apply. Terraform emits `delete` when a removed block omits
+   * `destroy = false`, and `forget` only when it is set, so the action itself
+   * is the evidence that nothing is destroyed.
+   */
+  function planWithAction(address: string, actions: string[]) {
+    const plan = initialCreatePlan();
+    plan.resource_changes.push(change(address, actions, {}, {}));
+    return plan;
+  }
+
+  it("permits forget for the one address it is scoped to", () => {
+    const plan = planWithAction(FORGETTABLE_STATE_ADDRESS, ["forget"]);
+    const result = evaluatePlan(plan, { mode: "initial" });
+    expect(result.violations).toEqual([]);
+    expect(result.ok).toBe(true);
+    expect(result.forgottenAddresses).toEqual([FORGETTABLE_STATE_ADDRESS]);
+    expect(formatReport(result)).toContain("state entries forgotten      1 (nothing destroyed)");
+  });
+
+  it("refuses forget for any other address", () => {
+    for (const address of [
+      "aws_lambda_function.supplier_simulator",
+      "aws_connect_contact_flow.supplier_simulator",
+      "aws_lexv2models_bot.supplier_simulator",
+      "aws_iam_role.lex_bot",
+    ]) {
+      const found = codes(planWithAction(address, ["forget"]), "initial");
+      expect(found).toContain("forget-action");
+    }
+  });
+
+  it("still refuses delete and replace on that same address", () => {
+    // The allowance is for forget alone. A removed block without
+    // destroy = false produces delete, and that must stay refused.
+    expect(codes(planWithAction(FORGETTABLE_STATE_ADDRESS, ["delete"]), "initial")).toContain(
+      "delete-action",
+    );
+    expect(
+      codes(planWithAction(FORGETTABLE_STATE_ADDRESS, ["delete", "create"]), "initial"),
+    ).toContain("replace-action");
+  });
+
+  it("does not treat the forgotten address as an unexpected resource", () => {
+    const result = evaluatePlan(planWithAction(FORGETTABLE_STATE_ADDRESS, ["forget"]), {
+      mode: "initial",
+    });
+    expect(result.unexpected).toEqual([]);
+  });
+
+  it("reports zero forgotten entries on an ordinary plan", () => {
+    const result = evaluatePlan(initialCreatePlan(), { mode: "initial" });
+    expect(result.forgottenAddresses).toEqual([]);
+    expect(result.ok).toBe(true);
   });
 });
 
