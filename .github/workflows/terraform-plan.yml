@@ -31,6 +31,14 @@ on:
         required: false
         default: false
         type: boolean
+      recovery_mode:
+        description: 'Allow the reviewed one-time simulator Lambda replacement recovery'
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
 
 permissions:
   contents: read
@@ -178,6 +186,7 @@ jobs:
         env:
           SIMULATOR: ${{ inputs.simulator_enabled }}
           RECORDING: ${{ inputs.enable_call_recording }}
+          RECOVERY: ${{ inputs.recovery_mode }}
         run: |
           set -euo pipefail
           if [ "$RECORDING" != "false" ]; then
@@ -185,11 +194,23 @@ jobs:
             echo "::error::Attaching a CALL_RECORDINGS configuration replaces whatever the Connect instance already has, and that baseline has not been captured. Capture it first."
             exit 1
           fi
-          case "$SIMULATOR" in
-            false) MODE=initial ;;
-            true)  MODE=qualification ;;
-            *) echo "::error::simulator_enabled must be true or false, got '${SIMULATOR}'"; exit 1 ;;
+          case "$RECOVERY" in
+            false|true) ;;
+            *) echo "::error::recovery_mode must be true or false, got '${RECOVERY}'"; exit 1 ;;
           esac
+          if [ "$RECOVERY" = "true" ]; then
+            if [ "$SIMULATOR" != "false" ]; then
+              echo "::error::recovery_mode requires simulator_enabled=false"
+              exit 1
+            fi
+            MODE=recovery
+          else
+            case "$SIMULATOR" in
+              false) MODE=initial ;;
+              true)  MODE=qualification ;;
+              *) echo "::error::simulator_enabled must be true or false, got '${SIMULATOR}'"; exit 1 ;;
+            esac
+          fi
           echo "PLAN_POLICY_MODE=${MODE}" >> "$GITHUB_ENV"
           echo "::notice::Plan safety policy: ${MODE}"
 
@@ -275,7 +296,7 @@ jobs:
         working-directory: infrastructure/terraform
         run: |
           set -euo pipefail
-          node ../../scripts/terraform/assertQualificationPlan.mjs \
+          node ../../scripts/terraform/assertQualificationPolicy.mjs \
             --plan tfplan.json \
             --mode "$PLAN_POLICY_MODE" \
             --report plan-policy-report.json | tee policy.txt
@@ -302,6 +323,7 @@ jobs:
             echo "policy mode: \`${PLAN_POLICY_MODE}\`"
             echo "simulator_enabled: \`${{ inputs.simulator_enabled }}\`"
             echo "enable_call_recording: \`${{ inputs.enable_call_recording }}\`"
+            echo "recovery_mode: \`${{ inputs.recovery_mode }}\`"
             echo ''
             echo '```'
             # Counts only. A full plan echoes ARNs and the contact-flow body,
