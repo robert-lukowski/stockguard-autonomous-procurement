@@ -29,6 +29,22 @@ import {
 
 export const POLICY_MODES = Object.freeze(["initial", "qualification", "recovery"]);
 
+const RECOVERY_IMMUTABLE_ATTRIBUTES = Object.freeze([
+  "function_name",
+  "role",
+  "runtime",
+  "handler",
+  "timeout",
+  "memory_size",
+  "architectures",
+  "layers",
+  "vpc_config",
+  "kms_key_arn",
+  "file_system_config",
+  "image_uri",
+  "package_type",
+]);
+
 function numericConcurrency(value) {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && /^-?\d+$/.test(value)) return Number(value);
@@ -79,6 +95,10 @@ function transitionIs(change, before, after) {
     numericConcurrency(change?.before?.reserved_concurrent_executions) === before &&
     numericConcurrency(change?.after?.reserved_concurrent_executions) === after
   );
+}
+
+function jsonEqual(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 /**
@@ -136,14 +156,36 @@ export function evaluateQualificationPolicy(plan, { mode }) {
       });
     }
 
+    const beforeConcurrency = numericConcurrency(
+      lambda?.change?.before?.reserved_concurrent_executions,
+    );
     const afterConcurrency = numericConcurrency(
       lambda?.change?.after?.reserved_concurrent_executions,
     );
-    if (afterConcurrency !== 0) {
+    if (beforeConcurrency !== -1 || afterConcurrency !== 0) {
       extra.push({
         code: "recovery-concurrency",
         address: SIMULATOR_ARMING_ADDRESS,
-        detail: `recovery replacement must leave reserved_concurrent_executions=0 while disarmed; planned value is ${String(lambda?.change?.after?.reserved_concurrent_executions)}`,
+        detail: `recovery replacement must be reserved_concurrent_executions -1 -> 0; planned transition is ${String(lambda?.change?.before?.reserved_concurrent_executions)} -> ${String(lambda?.change?.after?.reserved_concurrent_executions)}`,
+      });
+    }
+
+    const before = lambda?.change?.before ?? {};
+    const after = lambda?.change?.after ?? {};
+    for (const key of RECOVERY_IMMUTABLE_ATTRIBUTES) {
+      if (!jsonEqual(before?.[key], after?.[key])) {
+        extra.push({
+          code: "recovery-attribute-change",
+          address: SIMULATOR_ARMING_ADDRESS,
+          detail: `recovery replacement must not change ${key}`,
+        });
+      }
+    }
+    if (!jsonEqual(before?.environment, after?.environment)) {
+      extra.push({
+        code: "recovery-environment-change",
+        address: SIMULATOR_ARMING_ADDRESS,
+        detail: "recovery replacement must not change the Lambda environment",
       });
     }
 
