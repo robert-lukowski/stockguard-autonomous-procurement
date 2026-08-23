@@ -64,8 +64,10 @@ describe("infrastructure safety invariants", () => {
     }
   });
 
-  it("bounds Lambda concurrency so a runaway cannot fan out", () => {
-    expect(tf("lambda.tf")).toMatch(/reserved_concurrent_executions\s*=\s*[12]\b/);
+  it("keeps Lambda at zero concurrency until the simulator is armed", () => {
+    expect(tf("lambda.tf")).toContain(
+      "reserved_concurrent_executions = var.simulator_enabled ? -1 : 0",
+    );
   });
 
   it("bounds CloudWatch retention explicitly", () => {
@@ -455,7 +457,7 @@ describe("workflow safety invariants", () => {
     for (const workflow of [plan, apply]) {
       const stripped = withoutComments(workflow);
       expect(stripped).toContain("terraform show -json tfplan > tfplan.json");
-      expect(stripped).toContain("scripts/terraform/assertQualificationPlan.mjs");
+      expect(stripped).toContain("scripts/terraform/assertQualificationPolicy.mjs");
       expect(stripped).toContain('--plan tfplan.json');
       expect(stripped).toContain('--mode "$PLAN_POLICY_MODE"');
     }
@@ -463,7 +465,7 @@ describe("workflow safety invariants", () => {
 
   it("runs the gate before apply, never after", () => {
     const stripped = withoutComments(apply);
-    const gate = stripped.indexOf("assertQualificationPlan.mjs");
+    const gate = stripped.indexOf("assertQualificationPolicy.mjs");
     const applyStep = stripped.indexOf("terraform apply");
     expect(gate).toBeGreaterThan(-1);
     expect(applyStep).toBeGreaterThan(-1);
@@ -488,9 +490,12 @@ describe("workflow safety invariants", () => {
       expect(block).toContain('if [ "$RECORDING" != "false" ]');
       expect(block).toContain("exit 1");
       // false selects the initial policy, true selects qualification; anything
-      // else is refused rather than defaulted.
+      // else is refused rather than defaulted. Recovery is a separate explicit
+      // opt-in and still requires simulator=false.
       expect(block).toContain("MODE=initial");
       expect(block).toContain("MODE=qualification");
+      expect(block).toContain("MODE=recovery");
+      expect(block).toContain('if [ "$RECOVERY" = "true" ]');
     }
   });
 
