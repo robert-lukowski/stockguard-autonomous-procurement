@@ -83,6 +83,8 @@ describe("post-apply verification is read-only", () => {
       "en_US", // locale built
       "describe-bot-alias", // qualification alias exists
       "botVersion", // alias points at a numbered version
+      "ALIAS_VERSION", // the locale checked is the one the alias serves
+      "EXPECT_SIMULATOR", // concurrency expectation follows the armed state
       "get-policy", // Lex may invoke the function
       "lexv2.amazonaws.com",
       "describe-contact-flow", // StockGuard flow exists
@@ -118,6 +120,22 @@ describe("post-apply verification is read-only", () => {
 
   it("points at the runbook step that covers the manual check", () => {
     expect(script).toContain("docs/aws-qualification-post-apply-runbook.md step 3");
+  });
+
+  it("checks the locale on the served version, not on DRAFT", () => {
+    // The runtime answers from the version the alias points at. Asserting on
+    // DRAFT failed a working deployment once already.
+    expect(executable).toContain('--bot-version "$ALIAS_VERSION"');
+    expect(executable).toContain("does not affect a call");
+  });
+
+  it("expects zero reserved concurrency while disarmed", () => {
+    // lambda.tf sets `var.simulator_enabled ? -1 : 0`. A reservation of zero
+    // means the function cannot be invoked at all, which is correct when
+    // disarmed - the old 1-10 bound failed exactly that state.
+    expect(executable).toContain('if [ "$EXPECT_SIMULATOR" = "false" ]');
+    expect(executable).toContain("the function cannot be invoked while disarmed");
+    expect(executable).not.toContain("1-10 bound");
   });
 
   it("refuses to run without explicit inputs rather than guessing", () => {

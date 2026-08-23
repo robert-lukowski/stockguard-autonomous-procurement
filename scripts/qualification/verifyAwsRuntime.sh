@@ -117,13 +117,28 @@ if LAMBDA_CFG="$(aws lambda get-function-configuration --region "$REGION" --func
   [ "$ALIASES" = "qualification" ] && pass "alias guard is exactly 'qualification'" \
     || fail "ALLOWED_LEX_ALIAS_NAMES='${ALIASES}', expected exactly 'qualification'"
 
+  # lambda.tf sets `var.simulator_enabled ? -1 : 0`, so the expected value
+  # depends on the deployment input:
+  #   disarmed -> 0, a reservation of ZERO. The function cannot be invoked at
+  #               all, which is the strongest possible disarmed state.
+  #   armed    -> -1, meaning no reservation, so the API returns nothing. The
+  #               account minimum-unreserved rule makes a positive reservation
+  #               impossible here.
+  # The old 1-10 bound predates that design and failed a correctly disarmed
+  # deployment.
   RESERVED="$(aws lambda get-function-concurrency --region "$REGION" --function-name "$FUNCTION_NAME" 2>/dev/null | jget ReservedConcurrentExecutions)"
-  if [ -z "$RESERVED" ]; then
-    fail "reserved concurrency is unset, so the function is unbounded"
-  elif [ "$RESERVED" -ge 1 ] && [ "$RESERVED" -le 10 ]; then
-    pass "reserved concurrency bounded at ${RESERVED}"
+  if [ "$EXPECT_SIMULATOR" = "false" ]; then
+    if [ "$RESERVED" = "0" ]; then
+      pass "reserved concurrency is 0 - the function cannot be invoked while disarmed"
+    else
+      fail "reserved concurrency is '${RESERVED:-unset}' but a disarmed deployment must reserve 0"
+    fi
   else
-    fail "reserved concurrency is ${RESERVED}, outside the expected 1-10 bound"
+    if [ -z "$RESERVED" ]; then
+      pass "no reservation while armed, as configured"
+    else
+      fail "reserved concurrency is ${RESERVED} but an armed deployment expects no reservation"
+    fi
   fi
 
   # Lex must be permitted to invoke; nothing else should be.
@@ -147,17 +162,6 @@ else
   fail "bot $(mask "$BOT_ID") not found"
 fi
 
-if LOCALE="$(aws lexv2-models describe-bot-locale --region "$REGION" --bot-id "$BOT_ID" --bot-version DRAFT --locale-id en_US 2>/dev/null)"; then
-  LOCALE_STATUS="$(printf '%s' "$LOCALE" | jget botLocaleStatus)"
-  # Built is what a runtime alias needs; NotBuilt means calls would fail.
-  case "$LOCALE_STATUS" in
-    Built|ReadyExpressTesting) pass "locale en_US is ${LOCALE_STATUS}" ;;
-    *) fail "locale en_US is ${LOCALE_STATUS}, expected Built" ;;
-  esac
-else
-  fail "locale en_US not found on the bot"
-fi
-
 if ALIAS="$(aws lexv2-models describe-bot-alias --region "$REGION" --bot-id "$BOT_ID" --bot-alias-id "$ALIAS_ID" 2>/dev/null)"; then
   ALIAS_NAME="$(printf '%s' "$ALIAS" | jget botAliasName)"
   ALIAS_VERSION="$(printf '%s' "$ALIAS" | jget botVersion)"
@@ -171,9 +175,29 @@ if ALIAS="$(aws lexv2-models describe-bot-alias --region "$REGION" --bot-id "$BO
     *) pass "alias points at bot version ${ALIAS_VERSION}" ;;
   esac
   info "alias status ${ALIAS_STATUS}"
+
+  # The runtime serves the version the ALIAS points at. DRAFT's build state is
+  # irrelevant to a call and is reported separately, below, purely as context
+  # for anyone editing the bot.
+  if [ -n "$ALIAS_VERSION" ] && [ "$ALIAS_VERSION" != "DRAFT" ]; then
+    RUNTIME_LOCALE="$(aws lexv2-models describe-bot-locale --region "$REGION" \
+      --bot-id "$BOT_ID" --bot-version "$ALIAS_VERSION" --locale-id en_US 2>/dev/null | jget botLocaleStatus)"
+    case "$RUNTIME_LOCALE" in
+      Built | ReadyExpressTesting)
+        pass "locale en_US on served version ${ALIAS_VERSION} is ${RUNTIME_LOCALE}" ;;
+      "")
+        fail "locale en_US not found on served version ${ALIAS_VERSION}" ;;
+      *)
+        fail "locale en_US on served version ${ALIAS_VERSION} is ${RUNTIME_LOCALE}, expected Built - the bot cannot answer a call" ;;
+    esac
+  fi
 else
   fail "alias $(mask "$ALIAS_ID") not found"
 fi
+
+DRAFT_LOCALE="$(aws lexv2-models describe-bot-locale --region "$REGION" \
+  --bot-id "$BOT_ID" --bot-version DRAFT --locale-id en_US 2>/dev/null | jget botLocaleStatus)"
+info "DRAFT locale en_US is ${DRAFT_LOCALE:-absent} (build state of DRAFT does not affect a call)"
 echo
 
 # --- Connect ---------------------------------------------------------------
