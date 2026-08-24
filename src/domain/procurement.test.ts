@@ -153,6 +153,54 @@ describe("validateOffer", () => {
   });
 });
 
+describe("total_within_autonomy_limit checks the actual order, not the offer", () => {
+  // forecast.requiredQuantity is 8 here (see the top-level fixture). The PO is
+  // always created for that quantity, never for a larger availableQuantity -
+  // see ProcurementWorkflow's purchase-order construction.
+
+  it("passes when the offered quantity's price would exceed budget but the actual order does not", () => {
+    // 30/unit * 20 offered = 600 > the 500 limit, but only 8 are ever ordered:
+    // 30 * 8 = 240, comfortably inside budget.
+    const candidate = offer({ unitPrice: 30, availableQuantity: 20 });
+    const result = selectBestCompliantOffer([candidate], forecast, policy, rates);
+
+    expect(result.status).toBe("ORDER_APPROVED");
+    expect(result.validation?.failedCheckIds).not.toContain(
+      "total_within_autonomy_limit",
+    );
+  });
+
+  it("still fails when the actual order itself exceeds budget", () => {
+    // 70/unit * 8 required = 560 > the 500 limit. Raising availableQuantity
+    // further must not paper over this.
+    const candidate = offer({ unitPrice: 70, availableQuantity: 20 });
+    const result = selectBestCompliantOffer([candidate], forecast, policy, rates);
+
+    expect(result.status).toBe("HUMAN_EXCEPTION_REQUIRED");
+    expect(
+      result.rejectedOffers[0]?.validation.failedCheckIds,
+    ).toContain("total_within_autonomy_limit");
+  });
+
+  it("prices the check evidence at the required quantity, not the offered one", () => {
+    const candidate = offer({ unitPrice: 30, availableQuantity: 20 });
+    const normalized = {
+      ...candidate,
+      unitPriceEur: candidate.unitPrice,
+      totalPriceEur: candidate.unitPrice * candidate.availableQuantity,
+    };
+    const result = validateOffer(normalized, forecast, policy);
+    const budgetCheck = result.checks.find(
+      (c) => c.id === "total_within_autonomy_limit",
+    );
+
+    expect(budgetCheck?.inputs).toMatchObject({
+      orderTotalEur: 240,
+      orderQuantity: 8,
+    });
+  });
+});
+
 describe("selectBestCompliantOffer", () => {
   it("selects the cheapest offer only after every hard check passes", () => {
     const result = selectBestCompliantOffer(
