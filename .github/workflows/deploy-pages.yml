@@ -20,6 +20,10 @@ jobs:
     name: Build static demo
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      # Public HTTPS endpoint only. CALL-E key, Judge PIN and destination stay
+      # server-side in AWS Secrets Manager and are never exposed to Vite.
+      VITE_QUALIFICATION_BACKEND_URL: ${{ vars.QUALIFICATION_BACKEND_URL }}
 
     steps:
       - name: Check out repository
