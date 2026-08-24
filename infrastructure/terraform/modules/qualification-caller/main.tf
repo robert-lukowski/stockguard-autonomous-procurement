@@ -80,8 +80,8 @@ resource "aws_iam_role_policy" "this" {
 
 data "archive_file" "this" {
   type        = "zip"
-  source_dir  = "${path.root}/build/qualificationCaller"
-  output_path = "${path.root}/build/qualificationCaller.zip"
+  source_dir  = "${path.root}/build/liveCaller"
+  output_path = "${path.root}/build/liveCaller.zip"
 }
 
 resource "aws_lambda_function" "this" {
