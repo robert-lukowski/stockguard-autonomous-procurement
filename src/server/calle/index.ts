@@ -1,4 +1,7 @@
-export { CallEApiAdapter } from "./CallEApiAdapter";
+export {
+  CallEApiAdapter,
+  DEFAULT_CALLE_HTTP_TIMEOUT_MS,
+} from "./CallEApiAdapter";
 export { MockCallEAdapter } from "./MockCallEAdapter";
 export type { MockSupplierResult } from "./MockCallEAdapter";
 export { supplierCallResultSchema } from "./resultSchema";

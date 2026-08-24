@@ -48,18 +48,15 @@ removed {
 # The contact flow: the smallest thing that proves the vertical slice
 #   Connect -> Lex V2 alias -> Lambda synthetic supplier.
 #
-# Deliberately four actions: logging, the primary Lex turn, one bounded retry,
-# and disconnect. Everything previously here was either optional or actively
-# unhelpful for a first qualification call:
+# Deliberately five actions: logging, a greeting that completes before Lex
+# listens, the primary Lex turn, one bounded retry, and disconnect.
 #
 #   UpdateContactTextToSpeechVoice  removed. Joanna is the documented default
 #                                   when the action never runs, and the Lex
 #                                   locale carries its own voice settings.
-#   MessageParticipant (greet)      removed. ConnectParticipantWithLexBot takes
-#                                   an optional Text parameter that plays the
-#                                   same greeting while gathering input, so a
-#                                   separate action and its error branch were
-#                                   pure surface area.
+#   MessageParticipant (greet)      KEPT separate from Lex. The first live calls
+#                                   proved that playing Text while Lex gathers
+#                                   input permits barge-in and messy turn-taking.
 #   MessageParticipant (goodbye)    removed, along with the error-path variant.
 #                                   Neither is needed to prove the path works.
 #
@@ -83,16 +80,26 @@ resource "aws_connect_contact_flow" "supplier_simulator" {
         Identifier  = "set-logging"
         Type        = "UpdateFlowLoggingBehavior"
         Parameters  = { FlowLoggingBehavior = "Enabled" }
-        Transitions = { NextAction = "lex-primary" }
+        Transitions = { NextAction = "supplier-greeting" }
+      },
+      {
+        Identifier = "supplier-greeting"
+        Type       = "MessageParticipant"
+        Parameters = {
+          Text = "Ridgeline Industrial Supply, sales desk. How can I help you today?"
+        }
+        Transitions = {
+          NextAction = "lex-primary"
+          Errors = [
+            { ErrorType = "NoMatchingError", NextAction = "disconnect" },
+          ]
+        }
       },
       {
         Identifier = "lex-primary"
         Type       = "ConnectParticipantWithLexBot"
         Parameters = {
-          # Text plays while gathering input. It is mutually exclusive with
-          # PromptId and SSML, neither of which is set.
           LexV2Bot = { AliasArn = local.lex_bot_alias_arn }
-          Text     = "Ridgeline Industrial Supply, sales desk. How can I help you today?"
         }
         Transitions = {
           NextAction = "disconnect"

@@ -100,19 +100,28 @@ describe("infrastructure invariants", () => {
 
   it("uses exactly one bounded Lex retry and then disconnects", () => {
     const connect = tf("connect.tf");
+    const greetingStart = connect.indexOf('Identifier = "supplier-greeting"');
     const primaryStart = connect.indexOf('Identifier = "lex-primary"');
     const retryStart = connect.indexOf('Identifier = "lex-retry"');
     const disconnectStart = connect.indexOf('Identifier  = "disconnect"');
+    const greeting = connect.slice(greetingStart, primaryStart);
     const primary = connect.slice(primaryStart, retryStart);
     const retry = connect.slice(retryStart, disconnectStart);
 
-    expect(primaryStart).toBeGreaterThan(-1);
+    expect(greetingStart).toBeGreaterThan(-1);
+    expect(primaryStart).toBeGreaterThan(greetingStart);
     expect(retryStart).toBeGreaterThan(primaryStart);
     expect(disconnectStart).toBeGreaterThan(retryStart);
     expect(connect.match(/Type\s*=\s*"ConnectParticipantWithLexBot"/g)).toHaveLength(2);
-    expect(connect).toContain(
+    expect(greeting).toContain('Type       = "MessageParticipant"');
+    expect(greeting).toContain(
       "Ridgeline Industrial Supply, sales desk. How can I help you today?",
     );
+    expect(greeting).toContain('NextAction = "lex-primary"');
+    expect(primary).not.toContain(
+      "Ridgeline Industrial Supply, sales desk. How can I help you today?",
+    );
+    expect(primary).not.toMatch(/\bText\s*=/);
     expect(connect).toContain(
       "Sorry, I didn't catch that. Could you repeat what you're calling about?",
     );

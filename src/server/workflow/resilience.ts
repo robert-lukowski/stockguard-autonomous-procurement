@@ -42,7 +42,9 @@ export type CallExecutionPolicy = {
 export const defaultCallExecutionPolicy: CallExecutionPolicy = {
   maximumAttempts: 2,
   maximumPolls: 58,
-  timeoutMs: 10_000,
+  // The adapter aborts CALL-E HTTP at 30s. This outer guard stays later so it
+  // cannot discard the adapter's categorized timeout first.
+  timeoutMs: 35_000,
   pollIntervalMs: 5_000,
   initialPollDelayMs: 15_000,
 };

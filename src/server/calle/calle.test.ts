@@ -1,11 +1,21 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CallEApiAdapter,
   CallSafetyError,
+  DEFAULT_CALLE_HTTP_TIMEOUT_MS,
   MockCallEAdapter,
   type CallAuthorization,
   type SupplierCallRequest,
 } from ".";
+
+beforeEach(() => {
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const request: SupplierCallRequest = {
   workflowId: "wf-2026-081",
@@ -121,6 +131,97 @@ describe("CallEApiAdapter", () => {
       "wf-2026-081:supplier-de-01:attempt:1",
     );
     expect(body.metadata.counterparty_mode).toBe("approved-supplier");
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+
+    const logged = vi.mocked(console.log).mock.calls.flat().join(" ");
+    expect(logged).toContain("CALLE_CALL_CREATE_STARTED");
+    expect(logged).toContain("CALLE_CALL_CREATE_SUCCEEDED");
+    expect(logged).toContain("call-test-01");
+    expect(logged).toContain("httpElapsedMs");
+    expect(logged).not.toContain("test-only");
+    expect(logged).not.toContain(request.phoneE164);
+  });
+
+  it("uses a 30-second default and abortable HTTP for call creation and polling", async () => {
+    expect(DEFAULT_CALLE_HTTP_TIMEOUT_MS).toBe(30_000);
+    const signals: AbortSignal[] = [];
+    const fetchImplementation = vi.fn(
+      (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        const signal = init?.signal;
+        if (!(signal instanceof AbortSignal)) {
+          throw new Error("Expected an AbortSignal");
+        }
+        signals.push(signal);
+        if (signals.length === 1) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ call_id: "call-real-01", status: "queued" })),
+          );
+        }
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(new DOMException("Aborted", "AbortError")),
+            { once: true },
+          );
+        });
+      },
+    );
+    const adapter = new CallEApiAdapter({
+      apiKey: "test-only",
+      realCallsEnabled: true,
+      fetchImplementation,
+      httpTimeoutMs: 5,
+    });
+
+    const created = await adapter.startSupplierCall(request, authorization);
+    await expect(adapter.getSupplierCall(created.callId)).rejects.toThrow(
+      "CALL_TIMEOUT",
+    );
+
+    expect(signals).toHaveLength(2);
+    expect(signals[0].aborted).toBe(false);
+    expect(signals[1].aborted).toBe(true);
+    expect(vi.mocked(console.warn).mock.calls.flat().join(" ")).toContain(
+      '"event":"CALLE_POLL_FAILED","category":"TIMEOUT"',
+    );
+  });
+
+  it("logs non-2xx status without credentials or destination data", async () => {
+    const fetchImplementation = vi.fn().mockResolvedValue(
+      new Response("unavailable", { status: 503 }),
+    );
+    const adapter = new CallEApiAdapter({
+      apiKey: "secret-test-key",
+      realCallsEnabled: true,
+      fetchImplementation,
+    });
+
+    await expect(
+      adapter.startSupplierCall(request, authorization),
+    ).rejects.toThrow("HTTP 503");
+
+    const warned = vi.mocked(console.warn).mock.calls.flat().join(" ");
+    expect(warned).toContain("CALLE_HTTP_NON_2XX");
+    expect(warned).toContain('"httpStatus":503');
+    expect(warned).not.toContain("secret-test-key");
+    expect(warned).not.toContain(request.phoneE164);
+  });
+
+  it("logs a terminal status when polling reaches one", async () => {
+    const adapter = new CallEApiAdapter({
+      apiKey: "test-only",
+      realCallsEnabled: true,
+      fetchImplementation: vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ call_id: "call-terminal", status: "failed" })),
+      ),
+    });
+
+    await adapter.getSupplierCall("call-terminal");
+
+    const logged = vi.mocked(console.log).mock.calls.flat().join(" ");
+    expect(logged).toContain("CALLE_TERMINAL_STATUS");
+    expect(logged).toContain("call-terminal");
+    expect(logged).toContain('"status":"failed"');
   });
 
   it("routes an allowlisted synthetic RFQ through the configured Connect number", async () => {
@@ -216,14 +317,20 @@ describe("CallEApiAdapter", () => {
     );
     expect(body.task).toContain("calling on behalf of StockGuard");
     expect(body.task).toContain(
-      "wait for the recipient's greeting to finish before speaking",
+      "The recipient is an automated supplier sales desk and will speak first",
     );
     expect(body.task).toContain(
-      "Do not interrupt or speak over the recipient's opening greeting",
+      "Do not begin speaking immediately when the call connects",
+    );
+    expect(body.task).toContain(
+      "completed the full opening greeting and there is a brief pause",
+    );
+    expect(body.task).toContain(
+      "If the recipient is speaking, never talk over them",
     );
     expect(body.task).toContain("already pinned to the English qualification profile");
     expect(body.task).toContain(
-      "I'm checking availability for 8 units of CF-220. Can you confirm stock, unit price and earliest delivery?",
+      "naturally ask the recipient to confirm stock, unit price, and earliest delivery for 8 units of CF-220",
     );
     expect(body.task).toContain(
       "If the recipient provides offer validity in the first response, do not ask for it again",

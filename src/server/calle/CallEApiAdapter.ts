@@ -19,12 +19,15 @@ import type {
 
 type FetchLike = typeof fetch;
 
+export const DEFAULT_CALLE_HTTP_TIMEOUT_MS = 30_000;
+
 type CallEApiConfig = {
   apiKey: string;
   baseUrl?: string;
   realCallsEnabled?: boolean;
   webhookUrl?: string;
   fetchImplementation?: FetchLike;
+  httpTimeoutMs?: number;
   syntheticSupplierSimulator?: {
     enabled: boolean;
     phoneE164: string;
@@ -122,16 +125,78 @@ function mapTask(response: CallETaskSnapshot): SupplierCallTask {
 export class CallEApiAdapter implements SupplierCallingPort {
   private readonly baseUrl: string;
   private readonly fetchImplementation: FetchLike;
+  private readonly httpTimeoutMs: number;
   private readonly startedCallsByWorkflow = new Map<string, number>();
 
   constructor(private readonly config: CallEApiConfig) {
     this.baseUrl = config.baseUrl ?? "https://api.heycall-e.com";
     this.fetchImplementation = config.fetchImplementation ?? fetch;
+    this.httpTimeoutMs = config.httpTimeoutMs ?? DEFAULT_CALLE_HTTP_TIMEOUT_MS;
+    if (!Number.isFinite(this.httpTimeoutMs) || this.httpTimeoutMs <= 0) {
+      throw new Error("CALL-E HTTP timeout must be positive");
+    }
     if (config.webhookUrl) {
       const webhook = new URL(config.webhookUrl);
       if (webhook.protocol !== "https:") {
         throw new Error("CALL-E webhook URL must use HTTPS");
       }
+    }
+  }
+
+  private async fetchTaskSnapshot(
+    operation: "CREATE" | "POLL",
+    path: string,
+    init: RequestInit,
+    callId?: string,
+  ): Promise<{ snapshot: CallETaskSnapshot; elapsedMs: number }> {
+    const controller = new AbortController();
+    const startedAt = Date.now();
+    let responseStatus: number | undefined;
+    const timeout = setTimeout(() => controller.abort(), this.httpTimeoutMs);
+
+    try {
+      const response = await this.fetchImplementation(`${this.baseUrl}${path}`, {
+        ...init,
+        signal: controller.signal,
+      });
+      responseStatus = response.status;
+
+      if (!response.ok) {
+        console.warn(JSON.stringify({
+          event: "CALLE_HTTP_NON_2XX",
+          operation,
+          ...(callId ? { callId } : {}),
+          httpStatus: response.status,
+          httpElapsedMs: Date.now() - startedAt,
+        }));
+        throw new Error(
+          operation === "CREATE"
+            ? `CALL-E call creation failed with HTTP ${response.status}`
+            : `CALL-E call lookup failed with HTTP ${response.status}`,
+        );
+      }
+
+      const snapshot = (await response.json()) as CallETaskSnapshot;
+      return { snapshot, elapsedMs: Date.now() - startedAt };
+    } catch (error) {
+      if (responseStatus !== undefined && (responseStatus < 200 || responseStatus >= 300)) {
+        throw error;
+      }
+
+      const category = controller.signal.aborted ? "TIMEOUT" : "NETWORK";
+      console.warn(JSON.stringify({
+        event: operation === "POLL" ? "CALLE_POLL_FAILED" : "CALLE_CALL_CREATE_FAILED",
+        category,
+        ...(callId ? { callId } : {}),
+        httpElapsedMs: Date.now() - startedAt,
+      }));
+
+      if (controller.signal.aborted) {
+        throw new Error("CALL_TIMEOUT", { cause: error });
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
@@ -184,7 +249,7 @@ export class CallEApiAdapter implements SupplierCallingPort {
     const openingInstructions = fixedQualification
       ? [
           'After the greeting, say: "Hello, I\'m an AI procurement assistant calling on behalf of StockGuard for a supplier qualification demo. This call only requests supplier availability and commercial information and cannot create a binding order."',
-          `Then ask: "I'm checking availability for ${request.requestedQuantity} units of ${request.sku}. Can you confirm stock, unit price and earliest delivery?"`,
+          `After the disclosure, naturally ask the recipient to confirm stock, unit price, and earliest delivery for ${request.requestedQuantity} units of ${request.sku}.`,
         ]
       : [
           "After the greeting, disclose that you are an AI procurement assistant calling on behalf of StockGuard for a supplier qualification demo.",
@@ -193,7 +258,9 @@ export class CallEApiAdapter implements SupplierCallingPort {
         ];
     const task = [
       `Call the approved supplier ${request.supplierName}.`,
-      "When the call connects, wait for the recipient's greeting to finish before speaking. Do not interrupt or speak over the recipient's opening greeting.",
+      fixedQualification
+        ? "The recipient is an automated supplier sales desk and will speak first. Do not begin speaking immediately when the call connects. Wait until the recipient has completed the full opening greeting and there is a brief pause before starting your introduction. If the recipient is speaking, never talk over them."
+        : "The recipient will speak first. Do not begin speaking immediately when the call connects. Wait until the recipient has completed the full opening greeting and there is a brief pause before starting your introduction. If the recipient is speaking, never talk over them.",
       ...routingInstructions,
       languageInstruction,
       ...openingInstructions,
@@ -204,7 +271,13 @@ export class CallEApiAdapter implements SupplierCallingPort {
       "Do not collect payment data, credentials, access codes, or unrelated personal information.",
     ].join(" ");
 
-    const response = await this.fetchImplementation(`${this.baseUrl}/v1/calls`, {
+    console.log(JSON.stringify({
+      event: "CALLE_CALL_CREATE_STARTED",
+      workflowId: request.workflowId,
+      supplierId: request.supplierId,
+      attemptNumber: request.attemptNumber,
+    }));
+    const { snapshot, elapsedMs } = await this.fetchTaskSnapshot("CREATE", "/v1/calls", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${this.config.apiKey}`,
@@ -246,18 +319,19 @@ export class CallEApiAdapter implements SupplierCallingPort {
       }),
     });
 
-    if (!response.ok) {
-      throw new Error(
-        `CALL-E call creation failed with HTTP ${response.status}`,
-      );
-    }
-
     this.startedCallsByWorkflow.set(
       request.workflowId,
       callsAlreadyStarted + 1,
     );
 
-    return mapTask((await response.json()) as CallETaskSnapshot);
+    const taskResult = mapTask(snapshot);
+    console.log(JSON.stringify({
+      event: "CALLE_CALL_CREATE_SUCCEEDED",
+      workflowId: request.workflowId,
+      callId: taskResult.callId,
+      httpElapsedMs: elapsedMs,
+    }));
+    return taskResult;
   }
 
   private validateSyntheticTarget(request: SupplierCallRequest): void {
@@ -305,21 +379,25 @@ export class CallEApiAdapter implements SupplierCallingPort {
   }
 
   async getSupplierCall(callId: string): Promise<SupplierCallTask> {
-    const response = await this.fetchImplementation(
-      `${this.baseUrl}/v1/calls/${encodeURIComponent(callId)}`,
+    const { snapshot, elapsedMs } = await this.fetchTaskSnapshot(
+      "POLL",
+      `/v1/calls/${encodeURIComponent(callId)}`,
       {
         headers: {
           Authorization: `Bearer ${this.config.apiKey}`,
         },
       },
+      callId,
     );
-
-    if (!response.ok) {
-      throw new Error(
-        `CALL-E call lookup failed with HTTP ${response.status}`,
-      );
-    }
-
-    return mapTask((await response.json()) as CallETaskSnapshot);
+    const task = mapTask(snapshot);
+    const terminal = ["completed", "failed"].includes(task.status);
+    console.log(JSON.stringify({
+      event: terminal ? "CALLE_TERMINAL_STATUS" : "CALLE_POLL_SUCCEEDED",
+      callId: task.callId,
+      status: task.status,
+      ...(terminal ? { outcome: task.outcome } : {}),
+      httpElapsedMs: elapsedMs,
+    }));
+    return task;
   }
 }
