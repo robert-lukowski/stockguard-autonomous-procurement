@@ -11,7 +11,7 @@
     "test": "vitest run",
     "validate:aws-bootstrap": "node scripts/validate-aws-readonly-bootstrap.mjs",
     "test:aws-inventory": "node scripts/test-aws-readonly-inventory.mjs",
-    "build:lambda": "esbuild infrastructure/terraform/lambda/supplierSimulatorHandler.ts --bundle --platform=node --target=node22 --format=cjs --outfile=infrastructure/terraform/build/supplierSimulator/index.js"
+    "build:lambda": "esbuild infrastructure/terraform/lambda/supplierSimulatorHandler.ts --bundle --platform=node --target=node22 --format=cjs --outfile=infrastructure/terraform/build/supplierSimulator/index.js && esbuild infrastructure/terraform/lambda/qualificationCallerHandler.ts --bundle --platform=node --target=node22 --format=cjs --external:@aws-sdk/client-secrets-manager --outfile=infrastructure/terraform/build/qualificationCaller/index.js"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",
