@@ -121,7 +121,7 @@ describe("infrastructure invariants", () => {
     expect(primary).not.toContain(
       "Ridgeline Industrial Supply, sales desk. How can I help you today?",
     );
-    expect(primary).not.toMatch(/\bText\s*=/);
+    expect(primary).toContain('Text = "Please go ahead."');
     expect(connect).toContain(
       "Sorry, I didn't catch that. Could you repeat what you're calling about?",
     );
