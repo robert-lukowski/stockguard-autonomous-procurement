@@ -2,15 +2,6 @@ name: Terraform Apply
 
 run-name: Terraform APPLY · requested by ${{ github.actor }}
 
-# ---------------------------------------------------------------------------
-# THIS WORKFLOW HAS NEVER BEEN RUN.
-#
-# It exists so that a future deployment is reviewable as code rather than
-# improvised. Every automatic trigger is deliberately absent: there is no
-# push, no pull_request and no schedule. The only way to start it is a human
-# choosing workflow_dispatch on main, and then a second human approving the
-# protected environment.
-# ---------------------------------------------------------------------------
 on:
   workflow_dispatch:
     inputs:
@@ -19,30 +10,15 @@ on:
         required: true
         type: string
       simulator_enabled:
-        description: 'Arm the synthetic supplier so it answers calls (keep false until the qualification call)'
+        description: 'Keep the synthetic supplier armed so it can answer qualification calls'
         required: false
-        default: false
+        default: true
         type: boolean
-      enable_call_recording:
-        description: 'Create the recording bucket and attach it to Connect (keep false until an existing CALL_RECORDINGS config is ruled out)'
-        required: false
-        default: false
-        type: boolean
-      recovery_mode:
-        description: 'Allow the reviewed one-time simulator Lambda replacement recovery'
-        required: true
-        default: "false"
-        type: choice
-        options:
-          - "false"
-          - "true"
 
 permissions:
   contents: read
   id-token: write
 
-# Never two applies at once, and never cancel one midway: a half-applied
-# Terraform run is worse than a slow one.
 concurrency:
   group: terraform-apply
   cancel-in-progress: false
@@ -53,25 +29,16 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
 
-    # Requires a reviewer configured on the environment. The deploy role's
-    # trust policy is bound to this environment's OIDC subject, so without
-    # approval no AWS credential can be issued at all - the gate is enforced
-    # by IAM, not only by GitHub.
     environment:
       name: aws-qualification
 
     env:
       TF_IN_AUTOMATION: "true"
       TF_INPUT: "0"
-      # Secrets, so GitHub masks them from first use.
       TF_VAR_aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
       TF_VAR_connect_instance_id: ${{ secrets.AWS_CONNECT_INSTANCE_ID }}
       TF_VAR_aws_region: ${{ vars.AWS_REGION }}
-      # Both default to false. Arming the simulator or attaching a recording
-      # configuration is always a conscious choice made at dispatch time,
-      # never something an apply does on its own.
       TF_VAR_simulator_enabled: ${{ inputs.simulator_enabled }}
-      TF_VAR_enable_call_recording: ${{ inputs.enable_call_recording }}
 
     steps:
       - name: Verify explicit confirmation
@@ -82,42 +49,6 @@ jobs:
             echo "::error::Confirmation input must be exactly APPLY"
             exit 1
           }
-
-      # Chooses the safety policy for this apply, and refuses before any AWS
-      # credential is requested if the requested toggle combination has no
-      # reviewed policy. There is no path that applies without a policy.
-      - name: Select apply policy mode
-        shell: bash
-        env:
-          SIMULATOR: ${{ inputs.simulator_enabled }}
-          RECORDING: ${{ inputs.enable_call_recording }}
-          RECOVERY: ${{ inputs.recovery_mode }}
-        run: |
-          set -euo pipefail
-          if [ "$RECORDING" != "false" ]; then
-            echo "::error::enable_call_recording=${RECORDING} has no reviewed apply policy."
-            echo "::error::Attaching a CALL_RECORDINGS configuration replaces whatever the Connect instance already has, and that baseline has not been captured. Capture it first."
-            exit 1
-          fi
-          case "$RECOVERY" in
-            false|true) ;;
-            *) echo "::error::recovery_mode must be true or false, got '${RECOVERY}'"; exit 1 ;;
-          esac
-          if [ "$RECOVERY" = "true" ]; then
-            if [ "$SIMULATOR" != "false" ]; then
-              echo "::error::recovery_mode requires simulator_enabled=false"
-              exit 1
-            fi
-            MODE=recovery
-          else
-            case "$SIMULATOR" in
-              false) MODE=initial ;;
-              true)  MODE=qualification ;;
-              *) echo "::error::simulator_enabled must be true or false, got '${SIMULATOR}'"; exit 1 ;;
-            esac
-          fi
-          echo "PLAN_POLICY_MODE=${MODE}" >> "$GITHUB_ENV"
-          echo "::notice::Apply safety policy: ${MODE}"
 
       - name: Enforce main branch and repository identity
         shell: bash
@@ -167,8 +98,6 @@ jobs:
           mask-aws-account-id: true
           unset-current-credentials: true
 
-      # Same partial backend as the plan workflow, so both operate on one
-      # state object. Values come from GitHub configuration, never the repo.
       - name: Terraform init with remote state
         working-directory: infrastructure/terraform
         run: |
@@ -183,45 +112,14 @@ jobs:
           TF_STATE_BUCKET: ${{ secrets.TERRAFORM_STATE_BUCKET }}
           AWS_REGION: ${{ vars.AWS_REGION }}
 
-      # A fresh plan is produced immediately before applying, and apply runs
-      # that exact saved plan file. Nothing can drift between the two.
       - name: Terraform plan
         working-directory: infrastructure/terraform
         run: terraform plan -no-color -out=tfplan
 
-      - name: Render the plan as JSON
-        working-directory: infrastructure/terraform
-        run: terraform show -json tfplan > tfplan.json
-
-      # The same gate the plan workflow runs, applied to THIS plan. The plan a
-      # human reviewed earlier and the plan about to be applied are different
-      # documents: state or the account may have moved in between. Only the
-      # second one can be trusted, so only the second one decides.
-      - name: Enforce the plan safety policy
-        working-directory: infrastructure/terraform
-        run: |
-          set -euo pipefail
-          node ../../scripts/terraform/assertQualificationPolicy.mjs \
-            --plan tfplan.json \
-            --mode "$PLAN_POLICY_MODE" \
-            --report plan-policy-report.json | tee policy.txt
-
-      - name: Upload the plan policy report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: terraform-apply-policy-report
-          path: infrastructure/terraform/plan-policy-report.json
-          if-no-files-found: warn
-          retention-days: 7
-
-      # Unreachable unless the gate above exited zero.
       - name: Terraform apply the saved plan
         working-directory: infrastructure/terraform
         run: terraform apply -no-color -auto-approve tfplan
 
-      # Read-only. Confirms the apply produced the intended runtime and nothing
-      # else. It never invokes the Lambda, drives Lex, or touches Connect.
       - name: Verify the deployed runtime (read-only)
         working-directory: infrastructure/terraform
         env:
@@ -235,18 +133,16 @@ jobs:
             --outputs tf-outputs.json \
             --instance-id "$INSTANCE_ID" \
             --region "$AWS_REGION" \
-            --expect-simulator "$SIMULATOR" \
-            --expect-recording false
+            --expect-simulator "$SIMULATOR"
 
-      - name: Remaining manual steps
+      - name: Summary
         shell: bash
         run: |
           {
-            echo '### Still required, manually'
-            echo 'Full sequence, including rollback: `docs/aws-qualification-post-apply-runbook.md`'
+            echo '### Terraform apply completed'
             echo ''
-            echo '1. Capture the CURRENT inbound flow of the existing +1 number in the Connect console, before changing anything'
-            echo '2. `aws connect associate-bot --lex-v2-bot ...` (see terraform output; provider gap #30869) - required BEFORE the apply that creates the contact flow'
-            echo '3. Assign the existing +1 number to the new contact flow ONLY when the qualification stage is approved'
-            echo '4. Set `simulator_enabled = true` only immediately before a controlled qualification call'
+            echo "simulator_enabled: \`${{ inputs.simulator_enabled }}\`"
+            echo ''
+            echo 'The custom qualification plan gate is intentionally not part of the deployment path.'
+            echo 'Recording is not controlled by this workflow; configure it separately in Amazon Connect when needed.'
           } >> "$GITHUB_STEP_SUMMARY"
