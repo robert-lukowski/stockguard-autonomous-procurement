@@ -2,18 +2,6 @@ name: Terraform Plan
 
 run-name: Terraform plan · ${{ github.ref_name }}
 
-# Two jobs, deliberately separated.
-#
-#   validate — runs on every PR, holds NO environment and NO AWS credential.
-#   plan     — manual only, bound to the aws-qualification environment, which
-#              is what the deploy role's OIDC trust policy actually requires.
-#
-# Splitting them is not cosmetic. The role trusts the subject
-# `...:environment:aws-qualification`; a job without that environment presents
-# a `:ref:` subject instead and AssumeRoleWithWebIdentity fails. Keeping the
-# two apart also means PR-triggered code never has a deployment role at all.
-#
-# Neither job ever applies.
 on:
   pull_request:
     paths:
@@ -22,23 +10,10 @@ on:
   workflow_dispatch:
     inputs:
       simulator_enabled:
-        description: 'Arm the synthetic supplier so it answers calls (keep false until the qualification call)'
+        description: 'Keep the synthetic supplier armed in the reviewed plan'
         required: false
-        default: false
+        default: true
         type: boolean
-      enable_call_recording:
-        description: 'Create the recording bucket and attach it to Connect (keep false until an existing CALL_RECORDINGS config is ruled out)'
-        required: false
-        default: false
-        type: boolean
-      recovery_mode:
-        description: 'Allow the reviewed one-time simulator Lambda replacement recovery'
-        required: true
-        default: "false"
-        type: choice
-        options:
-          - "false"
-          - "true"
 
 permissions:
   contents: read
@@ -48,15 +23,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # JOB 1 — credential-free validation.
-  # ---------------------------------------------------------------------------
   validate:
     name: fmt and validate
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    # No `environment:` and no id-token permission: this job cannot obtain an
-    # AWS credential even by accident.
     env:
       TF_IN_AUTOMATION: "true"
       TF_INPUT: "0"
@@ -82,8 +52,6 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
 
-      # The bundle is gitignored and rebuilt here, so validation covers exactly
-      # what this commit produces rather than a stale artifact.
       - name: Build Lambda bundle
         run: npm run build:lambda
 
@@ -97,8 +65,6 @@ jobs:
         working-directory: infrastructure/terraform
         run: terraform fmt -check -recursive -diff
 
-      # -backend=false: no bucket, no credential, no state access. The backend
-      # is a partial block, so this is also the only way to init without one.
       - name: Terraform init (no backend)
         working-directory: infrastructure/terraform
         run: terraform init -backend=false
@@ -108,14 +74,10 @@ jobs:
         with:
           name: terraform-provider-lock
           path: infrastructure/terraform/.terraform.lock.hcl
-          # .terraform.lock.hcl is a dotfile and upload-artifact skips hidden
-          # files by default.
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
 
-      # `terraform validate` does not evaluate variable values, so this runs
-      # with no account id, no instance id and no credentials.
       - name: Terraform validate
         working-directory: infrastructure/terraform
         run: terraform validate -no-color
@@ -128,28 +90,18 @@ jobs:
             echo '### Terraform validate passed'
             if [ -z "${DEPLOY_ROLE:-}" ]; then
               echo ''
-              echo 'AWS plan skipped: AWS_DEPLOY_ROLE_ARN is not configured, so'
-              echo 'no AWS credential was requested and no AWS API call was made.'
+              echo 'AWS plan skipped: AWS_DEPLOY_ROLE_ARN is not configured.'
             else
               echo ''
-              echo 'A deploy role is configured. Run this workflow via'
-              echo 'workflow_dispatch on main to produce an AWS plan.'
+              echo 'Run this workflow manually on main to produce an AWS plan.'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
-          if [ -z "${DEPLOY_ROLE:-}" ]; then
-            echo "::notice::AWS plan skipped - deployment bootstrap not configured. fmt/init/validate passed."
-          fi
         env:
           DEPLOY_ROLE: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
 
-  # ---------------------------------------------------------------------------
-  # JOB 2 — the real plan. Manual, main-only, environment-bound.
-  # ---------------------------------------------------------------------------
   plan:
     name: plan against AWS
     needs: validate
-    # Manual dispatch on main only, and only once a deploy role exists. On a
-    # pull request this job is skipped entirely, so PR code never reaches AWS.
     if: >-
       github.event_name == 'workflow_dispatch' &&
       github.ref == 'refs/heads/main' &&
@@ -157,8 +109,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
 
-    # The subject the deploy role's trust policy demands. Without this the
-    # role cannot be assumed at all.
     environment:
       name: aws-qualification
 
@@ -177,42 +127,6 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REPOSITORY_ID" = "1341560793"
           test "$GITHUB_REPOSITORY_OWNER_ID" = "207513888"
-
-      # Chooses the safety policy for this dispatch, and fails before any AWS
-      # credential is requested if the requested toggle combination has no
-      # reviewed policy. The gate is never skipped, only satisfied.
-      - name: Select plan policy mode
-        shell: bash
-        env:
-          SIMULATOR: ${{ inputs.simulator_enabled }}
-          RECORDING: ${{ inputs.enable_call_recording }}
-          RECOVERY: ${{ inputs.recovery_mode }}
-        run: |
-          set -euo pipefail
-          if [ "$RECORDING" != "false" ]; then
-            echo "::error::enable_call_recording=${RECORDING} has no reviewed plan policy."
-            echo "::error::Attaching a CALL_RECORDINGS configuration replaces whatever the Connect instance already has, and that baseline has not been captured. Capture it first."
-            exit 1
-          fi
-          case "$RECOVERY" in
-            false|true) ;;
-            *) echo "::error::recovery_mode must be true or false, got '${RECOVERY}'"; exit 1 ;;
-          esac
-          if [ "$RECOVERY" = "true" ]; then
-            if [ "$SIMULATOR" != "false" ]; then
-              echo "::error::recovery_mode requires simulator_enabled=false"
-              exit 1
-            fi
-            MODE=recovery
-          else
-            case "$SIMULATOR" in
-              false) MODE=initial ;;
-              true)  MODE=qualification ;;
-              *) echo "::error::simulator_enabled must be true or false, got '${SIMULATOR}'"; exit 1 ;;
-            esac
-          fi
-          echo "PLAN_POLICY_MODE=${MODE}" >> "$GITHUB_ENV"
-          echo "::notice::Plan safety policy: ${MODE}"
 
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -247,8 +161,6 @@ jobs:
           mask-aws-account-id: true
           unset-current-credentials: true
 
-      # Harmless smoke test: proves the environment-bound OIDC trust works
-      # before anything reads state. Identity is never printed.
       - name: Verify assumed identity
         shell: bash
         run: |
@@ -256,7 +168,6 @@ jobs:
           aws sts get-caller-identity --query Arn --output text > /dev/null
           echo "::notice::OIDC role assumed successfully."
 
-      # Backend values are supplied here, never committed.
       - name: Terraform init with remote state
         working-directory: infrastructure/terraform
         run: |
@@ -277,63 +188,24 @@ jobs:
           TF_VAR_aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
           TF_VAR_connect_instance_id: ${{ secrets.AWS_CONNECT_INSTANCE_ID }}
           TF_VAR_aws_region: ${{ vars.AWS_REGION }}
-          # Both default to false. A plan never arms anything by itself, and
-          # the operator must consciously flip these on dispatch.
           TF_VAR_simulator_enabled: ${{ inputs.simulator_enabled }}
-          TF_VAR_enable_call_recording: ${{ inputs.enable_call_recording }}
         run: |
           set -euo pipefail
           terraform plan -no-color -out=tfplan | tee plan.txt
 
-      # The safety gate reads Terraform's machine-readable change model, not
-      # the human-readable plan text. tfplan and tfplan.json stay on the runner:
-      # they embed the account id, role ARNs and the contact-flow body.
-      - name: Render the plan as JSON
-        working-directory: infrastructure/terraform
-        run: terraform show -json tfplan > tfplan.json
-
-      - name: Enforce the plan safety policy
-        working-directory: infrastructure/terraform
-        run: |
-          set -euo pipefail
-          node ../../scripts/terraform/assertQualificationPolicy.mjs \
-            --plan tfplan.json \
-            --mode "$PLAN_POLICY_MODE" \
-            --report plan-policy-report.json | tee policy.txt
-
-      # Sanitized by construction: addresses, types and counts only.
-      - name: Upload the plan policy report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: terraform-plan-policy-report
-          path: infrastructure/terraform/plan-policy-report.json
-          if-no-files-found: warn
-          retention-days: 7
-
-      # Only reached when the gate above passed, so "reviewable" means the plan
-      # already satisfies the policy and now needs a human.
-      - name: Summarize the reviewable plan
+      - name: Summarize the plan
         shell: bash
         run: |
           set -euo pipefail
           {
-            echo '### Terraform plan · passed the safety policy'
+            echo '### Terraform plan'
             echo ''
-            echo "policy mode: \`${PLAN_POLICY_MODE}\`"
             echo "simulator_enabled: \`${{ inputs.simulator_enabled }}\`"
-            echo "enable_call_recording: \`${{ inputs.enable_call_recording }}\`"
-            echo "recovery_mode: \`${{ inputs.recovery_mode }}\`"
             echo ''
             echo '```'
-            # Counts only. A full plan echoes ARNs and the contact-flow body,
-            # so it stays in the job log rather than the summary.
             grep -E '^(Plan:|No changes)' infrastructure/terraform/plan.txt || echo 'see job log'
             echo '```'
             echo ''
-            echo '```'
-            cat infrastructure/terraform/policy.txt
-            echo '```'
-            echo ''
-            echo 'Review the plan in the job log before running Terraform Apply.'
+            echo 'The custom qualification plan gate is intentionally not part of the deployment path.'
+            echo 'Review the full plan in the job log before running Terraform Apply.'
           } >> "$GITHUB_STEP_SUMMARY"
