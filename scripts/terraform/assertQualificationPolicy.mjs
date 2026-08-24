@@ -3,18 +3,20 @@
 /**
  * Runtime policy wrapper around assertQualificationPlan.mjs.
  *
- * The base gate remains the source of truth for Architecture A. This wrapper
- * adds only two reviewed recovery-era exceptions:
+ * The base gate remains the source of truth for the existing Architecture A
+ * runtime. This wrapper adds only the narrow exceptions that cannot be
+ * expressed there without coupling the supplier simulator to the public judge
+ * endpoint:
  *
  * 1) the simulator Lambda may move between reserved concurrency 0 (disarmed)
  *    and -1 / unreserved (armed), because this AWS account cannot allocate a
  *    positive reservation while preserving the account's required unreserved
- *    pool; and
+ *    pool;
  * 2) recovery mode may replace exactly the tainted simulator Lambda once,
- *    while simulator=false and recording=false, with every other resource
- *    still constrained by the base initial policy.
- *
- * No other update, delete, replacement or unexpected resource is permitted.
+ *    while simulator=false and recording=false; and
+ * 3) the fixed qualification-caller module may exist. Its exact resources are
+ *    enumerated below; only the caller Lambda itself may be updated after
+ *    creation. No delete or replacement is permitted by this exception.
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
@@ -28,6 +30,19 @@ import {
 } from "./assertQualificationPlan.mjs";
 
 export const POLICY_MODES = Object.freeze(["initial", "qualification", "recovery"]);
+
+const QUALIFICATION_CALLER_LAMBDA =
+  "module.qualification_caller.aws_lambda_function.this";
+
+const QUALIFICATION_CALLER_RESOURCES = Object.freeze([
+  "module.qualification_caller.aws_cloudwatch_log_group.this",
+  "module.qualification_caller.aws_iam_role.this",
+  "module.qualification_caller.aws_iam_role_policy.this",
+  QUALIFICATION_CALLER_LAMBDA,
+  "module.qualification_caller.aws_lambda_function_url.this",
+]);
+
+const QUALIFICATION_CALLER_RESOURCE_SET = new Set(QUALIFICATION_CALLER_RESOURCES);
 
 const RECOVERY_IMMUTABLE_ATTRIBUTES = Object.freeze([
   "function_name",
@@ -60,6 +75,50 @@ function lambdaChange(plan) {
         (rc) => rc?.mode === "managed" && rc?.address === SIMULATOR_ARMING_ADDRESS,
       )
     : undefined;
+}
+
+function resourceChange(plan, address) {
+  return Array.isArray(plan?.resource_changes)
+    ? plan.resource_changes.find(
+        (rc) => rc?.mode === "managed" && rc?.address === address,
+      )
+    : undefined;
+}
+
+function callerViolationIsPermitted(plan, violation) {
+  const address = String(violation?.address ?? "");
+  if (!QUALIFICATION_CALLER_RESOURCE_SET.has(address)) return false;
+
+  const action = classifyActions(resourceChange(plan, address)?.change?.actions);
+  const common = new Set([
+    "unexpected-resource",
+    "unexpected-iam",
+    "forbidden:deployed-caller",
+  ]);
+
+  if (action === "no-op") return common.has(violation.code);
+  if (action === "create") {
+    return common.has(violation.code) || violation.code === "create-in-qualification";
+  }
+  if (action === "update" && address === QUALIFICATION_CALLER_LAMBDA) {
+    return common.has(violation.code) || violation.code === "update-action";
+  }
+  return false;
+}
+
+function allowQualificationCaller(base, plan, violations) {
+  const filtered = violations.filter(
+    (violation) => !callerViolationIsPermitted(plan, violation),
+  );
+  return {
+    violations: filtered,
+    unexpected: (base.unexpected ?? []).filter(
+      (address) => !QUALIFICATION_CALLER_RESOURCE_SET.has(address),
+    ),
+    qualificationCallerResources: QUALIFICATION_CALLER_RESOURCES.filter(
+      (address) => resourceChange(plan, address) !== undefined,
+    ),
+  };
 }
 
 function actualCounts(plan) {
@@ -268,7 +327,11 @@ export function evaluateQualificationPolicy(plan, { mode }) {
     violations = violations.filter((v) => !isReservedConcurrencyAttributeViolation(v));
   }
 
-  return withViolations(base, mode, violations, {
+  const caller = allowQualificationCaller(base, plan, violations);
+
+  return withViolations(base, mode, caller.violations, {
+    unexpected: caller.unexpected,
+    qualificationCallerResources: caller.qualificationCallerResources,
     concurrencyTransition:
       mode === "qualification" && transitionIs(change, 0, -1)
         ? "0 -> -1"

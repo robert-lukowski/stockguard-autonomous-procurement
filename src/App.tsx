@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { Disclosure } from "./ui/Disclosure";
+import { LiveQualificationPanel } from "./ui/LiveQualificationPanel";
 import { RuntimeBadge, RuntimeLegend } from "./ui/RuntimeBadge";
 import { runtimeClassificationOrder } from "./ui/runtimeClassification";
 import { JudgeWalkthrough } from "./ui/walkthrough/JudgeWalkthrough";
@@ -84,7 +85,7 @@ export default function App() {
               <ArrowDown aria-hidden="true" className="size-4" />
             </a>
             <p className="text-xs text-ground-600">
-              8 steps · no sign-up · nothing is dialled
+              8-step synthetic walkthrough · optional PIN-gated live CALL-E run below
             </p>
           </div>
         </motion.div>
@@ -92,6 +93,8 @@ export default function App() {
 
       <main className="mx-auto w-full max-w-5xl space-y-8 px-5 pb-20 sm:px-8">
         <JudgeWalkthrough />
+
+        <LiveQualificationPanel />
 
         <section
           aria-labelledby="pillars-heading"
@@ -121,9 +124,9 @@ export default function App() {
             What is real in this build
           </h2>
           <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-ground-400">
-            Every result in the walkthrough carries one of these five labels. Two
-            of them cannot be produced by this build at all, and are shown locked
-            rather than hidden.
+            The guided walkthrough remains deterministic and browser-local. The
+            separate live panel is the controlled bridge to the deployed CALL-E
+            and Amazon Connect qualification runtime.
           </p>
           <div className="mt-4">
             <RuntimeLegend ids={runtimeClassificationOrder} />
@@ -131,53 +134,41 @@ export default function App() {
 
           <div className="mt-4 space-y-3">
             <Disclosure
-              label="Why no live call is available here"
-              hint="safety boundary"
+              label="How the live qualification is isolated"
+              hint="server-side boundary"
             >
               <p className="mb-3">
-                This is a public static build. It contains no CALL-E API key, no
-                backend URL, no access code and no phone number. The live
-                adapters are fail-closed:{" "}
-                <code className="font-mono text-ground-300">CallEApiAdapter</code>{" "}
-                and{" "}
-                <code className="font-mono text-ground-300">
-                  CallEManagerEscalationAdapter
-                </code>{" "}
-                both throw{" "}
-                <code className="font-mono text-ground-300">REAL_CALLS_DISABLED</code>{" "}
-                before touching the network unless a server explicitly enables
-                them, and{" "}
-                <code className="font-mono text-ground-300">JudgeModeBackendClient</code>{" "}
-                refuses to transmit anything when no backend is configured.
+                GitHub Pages contains no CALL-E API key and no supplier phone
+                number. It contains only the public HTTPS backend URL. A judge
+                enters a PIN at runtime and explicitly confirms the call; the
+                backend verifies the PIN and then uses one server-side fixed
+                synthetic destination and one fixed English qualification
+                scenario.
               </p>
               <p>
-                No real calls, purchases, suppliers, organizations or production
-                data are used anywhere in this project. Every company, material
-                and order in the walkthrough is fictional.
+                The CALL-E credential, Judge PIN and controlled +1 destination
+                stay in AWS Secrets Manager. The browser cannot select another
+                number, supplier, material or quantity, and the live scenario
+                cannot create a binding purchase order.
               </p>
             </Disclosure>
 
             <Disclosure
               label="Amazon Connect, Lex V2 and Lambda"
-              hint="designed, not deployed"
+              hint="deployed qualification runtime"
             >
               <p className="mb-3">
-                A Lex V2 handler contract and a deterministic supplier data
-                service exist in the repository and are unit-tested, so a future
-                Amazon Connect deployment could expose the same three supplier
-                profiles as a conversational test counterparty on one allowlisted
-                number.
+                The controlled sandbox path is deployed: the existing +1 Amazon
+                Connect number reaches the StockGuard contact flow, which routes
+                the conversation to a built Lex V2 <code className="font-mono text-ground-300">en_US</code>{" "}
+                alias and the deterministic synthetic supplier Lambda.
               </p>
               <p>
-                <strong className="text-ground-200">
-                  Nothing is deployed today.
-                </strong>{" "}
-                The repository's own read-only AWS inventory workflow reports zero
-                StockGuard contact flows, zero associated Lambda functions and
-                zero Lex V2 bots. The Synthetic Supplier Simulator you see in the
-                walkthrough runs entirely in your browser. It is a test harness
-                for demonstrating telephony safely — it is not the product's
-                value, which is reaching real suppliers who have no API.
+                The English persona is Ridgeline Industrial Supply. It
+                deliberately changes payment terms, so the deterministic Policy
+                Gateway must require human handling even when the phone
+                conversation succeeds. Call recording remains disabled; no real
+                supplier or production data is used.
               </p>
             </Disclosure>
 
@@ -218,8 +209,9 @@ export default function App() {
         <div className="flex flex-wrap items-center gap-3 border-t border-ground-800/60 pt-6">
           <RuntimeBadge id="MOCK_RUNTIME" size="sm" />
           <p className="text-xs text-ground-600">
-            Synthetic data only. No real calls, purchases, suppliers or
-            production data are used.
+            The walkthrough uses synthetic browser data. The optional live path
+            makes a real telephone call only to StockGuard&apos;s controlled synthetic
+            supplier; no real supplier, purchase or production data is involved.
           </p>
         </div>
       </footer>

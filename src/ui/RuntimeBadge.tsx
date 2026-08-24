@@ -9,10 +9,22 @@ type Props = {
   /** Renders the one-line meaning next to the label. */
   withMeaning?: boolean;
   size?: "sm" | "md";
+  /**
+   * Runtime-earned availability for one rendered result. This never mutates
+   * the classification registry; use it only after a backend reports the
+   * corresponding live runtime for an actual run.
+   */
+  availableOverride?: boolean;
 };
 
-export function RuntimeBadge({ id, withMeaning = false, size = "md" }: Props) {
+export function RuntimeBadge({
+  id,
+  withMeaning = false,
+  size = "md",
+  availableOverride,
+}: Props) {
   const classification = runtimeClassifications[id];
+  const available = availableOverride ?? classification.available;
   const padding = size === "sm" ? "px-2 py-0.5 text-[11px]" : "px-3 py-1 text-xs";
 
   return (
@@ -20,7 +32,7 @@ export function RuntimeBadge({ id, withMeaning = false, size = "md" }: Props) {
       <span
         className={`inline-flex items-center gap-1.5 rounded-full border font-medium tracking-wide uppercase ${padding} ${classification.tone}`}
       >
-        {classification.available ? (
+        {available ? (
           <span
             aria-hidden="true"
             className={`size-1.5 rounded-full ${classification.dot}`}
@@ -29,7 +41,7 @@ export function RuntimeBadge({ id, withMeaning = false, size = "md" }: Props) {
           <Lock aria-hidden="true" className="size-3" />
         )}
         {classification.label}
-        {!classification.available && (
+        {!available && (
           <span className="font-normal normal-case opacity-80">
             · not connected
           </span>

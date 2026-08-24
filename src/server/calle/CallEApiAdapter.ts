@@ -32,6 +32,12 @@ type CallEApiConfig = {
     allowedProfileIds: Array<
       "DE_SUPPLIER" | "FR_SUPPLIER" | "PL_SUPPLIER" | "EN_SUPPLIER"
     >;
+    /**
+     * Architecture A is already pinned to EN_SUPPLIER in Connect/Lex, so it
+     * has no routing-code prompt. Later multi-profile simulator deployments may
+     * opt back into the routing-code conversation.
+     */
+    routingMode?: "routing-code" | "fixed-qualification";
   };
 };
 
@@ -154,25 +160,36 @@ export class CallEApiAdapter implements SupplierCallingPort {
     }
 
     const syntheticRouting = request.syntheticRouting;
+    const fixedQualification =
+      syntheticRouting &&
+      this.config.syntheticSupplierSimulator?.routingMode === "fixed-qualification";
     const routingInstructions = syntheticRouting
-      ? [
-          "The recipient is a deterministic synthetic supplier test harness, not a real company.",
-          `At the initial English routing prompt, clearly say: routing code ${syntheticRouting.routingCode.split("").join(" ")}.`,
-          "Wait for the test harness to confirm the target language, then continue in the requested conversation locale.",
-          `The expected synthetic profile is ${syntheticRouting.supplierProfileId} and RFQ is ${syntheticRouting.rfqId}.`,
-        ]
+      ? fixedQualification
+        ? [
+            "The recipient is the deterministic synthetic supplier test harness, not a real company.",
+            "This endpoint is already pinned to the English qualification profile. Do not say or ask for a routing code; begin directly with the procurement qualification.",
+            `The expected synthetic profile is ${syntheticRouting.supplierProfileId} and RFQ is ${syntheticRouting.rfqId}.`,
+          ]
+        : [
+            "The recipient is a deterministic synthetic supplier test harness, not a real company.",
+            `At the initial English routing prompt, clearly say: routing code ${syntheticRouting.routingCode.split("").join(" ")}.`,
+            "Wait for the test harness to confirm the target language, then continue in the requested conversation locale.",
+            `The expected synthetic profile is ${syntheticRouting.supplierProfileId} and RFQ is ${syntheticRouting.rfqId}.`,
+          ]
       : [];
-    const languageInstruction = syntheticRouting
-      ? `Except for the short English routing phrase, use ${request.locale} throughout the supplier conversation.`
-      : `Use ${request.locale} throughout the conversation.`;
+    const languageInstruction =
+      syntheticRouting && !fixedQualification
+        ? `Except for the short English routing phrase, use ${request.locale} throughout the supplier conversation.`
+        : `Use ${request.locale} throughout the conversation.`;
     const task = [
       `Call the approved supplier ${request.supplierName}.`,
-      `Immediately disclose that you are an AI procurement assistant calling for a fictional test organization.`,
-      `State that the call only requests availability information and cannot create a binding order.`,
+      "Immediately disclose that you are an AI procurement assistant calling for a fictional test organization.",
+      "State that the call only requests availability information and cannot create a binding order.",
       ...routingInstructions,
       languageInstruction,
       `Confirm availability of ${request.requestedQuantity} units of SKU ${request.sku} before ${request.requiredBy}.`,
       "Collect unit price, currency, earliest delivery, offer validity, and any changed commercial terms.",
+      "Ask at least one follow-up question specifically about the commercial or payment terms.",
       "If the recipient opts out, stop the conversation and record the opt-out.",
       "Do not collect payment data, credentials, access codes, or unrelated personal information.",
     ].join(" ");
