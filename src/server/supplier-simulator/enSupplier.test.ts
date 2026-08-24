@@ -29,6 +29,14 @@ function service() {
   );
 }
 
+function englishDate(value: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "long",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(value));
+}
+
 describe("English synthetic supplier", () => {
   it("is registered with a Lex en_US locale", () => {
     const profile = syntheticSupplierProfiles.EN_SUPPLIER;
@@ -57,19 +65,20 @@ describe("English synthetic supplier", () => {
     });
 
     expect(first.message).toBe(second.message);
-    expect(first.message).toContain("units are available");
+    expect(first.message).toContain(
+      `Thanks for calling ${first.quote.supplierName}. Let me check that for you.`,
+    );
     expect(first.quote.locale).toBe("en_US");
     expect(first.quote.deterministic).toBe(true);
 
-    // The message must speak real values, not literal template placeholders.
-    // "units are available" is fixed text and survives an un-interpolated
-    // template, so it cannot catch that bug on its own - these assertions can.
+    // Every spoken offer value comes from the deterministic quote.
     expect(first.message).not.toContain("${");
-    expect(first.message).toContain(rfq.rfqId);
     expect(first.message).toContain(String(first.quote.availableQuantity));
-    expect(first.message).toContain(first.quote.unitPrice.toFixed(2));
+    expect(first.message).toContain(first.quote.sku);
+    expect(first.message).toContain(String(first.quote.unitPrice));
     expect(first.message).toContain(first.quote.currency);
-    expect(first.message).toContain(first.quote.deliveryAt.slice(0, 10));
+    expect(first.message).toContain(englishDate(first.quote.deliveryAt));
+    expect(first.message).toContain(englishDate(first.quote.offerValidUntil));
   });
 
   it("interpolates every English intent that carries quote values", async () => {
@@ -100,7 +109,22 @@ describe("English synthetic supplier", () => {
     });
 
     expect(response.quote.commercialTermsChanged).toBe(true);
-    expect(response.message).toContain("advance payment");
+    expect(response.message).toBe(
+      "There is one change I should mention. Our payment terms have changed from net 30 days to advance payment.",
+    );
+  });
+
+  it("ends the English conversation naturally", async () => {
+    const response = await service().respond({
+      intent: "EndConversation",
+      rfqId: rfq.rfqId,
+      profileId: "EN_SUPPLIER",
+    });
+
+    expect(response.message).toBe(
+      `That covers everything from our side. Thank you for calling ${response.quote.supplierName}.`,
+    );
+    expect(response.continueConversation).toBe(false);
   });
 
   it("cannot accidentally produce a compliant offer", async () => {

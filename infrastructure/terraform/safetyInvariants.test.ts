@@ -90,12 +90,49 @@ describe("infrastructure invariants", () => {
     expect(lambda).not.toMatch(/source_arn\s*=\s*"[^"]*bot-alias\/\*/);
   });
 
-  it("keeps the Connect flow minimal and recording-free", () => {
+  it("keeps the Connect flow recording-free", () => {
     const connect = tf("connect.tf");
     expect(connect).toContain("ConnectParticipantWithLexBot");
     expect(connect).toContain("DisconnectParticipant");
     expect(connect).not.toContain("UpdateContactRecordingBehavior");
     expect(connect).not.toContain("aws_connect_phone_number");
+  });
+
+  it("uses exactly one bounded Lex retry and then disconnects", () => {
+    const connect = tf("connect.tf");
+    const primaryStart = connect.indexOf('Identifier = "lex-primary"');
+    const retryStart = connect.indexOf('Identifier = "lex-retry"');
+    const disconnectStart = connect.indexOf('Identifier  = "disconnect"');
+    const primary = connect.slice(primaryStart, retryStart);
+    const retry = connect.slice(retryStart, disconnectStart);
+
+    expect(primaryStart).toBeGreaterThan(-1);
+    expect(retryStart).toBeGreaterThan(primaryStart);
+    expect(disconnectStart).toBeGreaterThan(retryStart);
+    expect(connect.match(/Type\s*=\s*"ConnectParticipantWithLexBot"/g)).toHaveLength(2);
+    expect(connect).toContain(
+      "Ridgeline Industrial Supply, sales desk. How can I help you today?",
+    );
+    expect(connect).toContain(
+      "Sorry, I didn't catch that. Could you repeat what you're calling about?",
+    );
+    expect(primary.match(/NextAction = "lex-retry"/g)).toHaveLength(2);
+    expect(primary).toContain('NextAction = "disconnect"');
+    expect(retry.match(/NextAction = "disconnect"/g)).toHaveLength(3);
+    expect(retry).not.toMatch(/NextAction = "lex-(?:primary|retry)"/);
+  });
+
+  it("recognizes natural StockGuard qualification openings", () => {
+    const lex = tf("lex.tf");
+    for (const utterance of [
+      "I'm an AI procurement assistant calling on behalf of StockGuard",
+      "I'm calling on behalf of StockGuard for a supplier qualification",
+      "I need to confirm availability and pricing",
+      "Can you confirm stock unit price and delivery",
+      "This call requests supplier availability and commercial information",
+    ]) {
+      expect(lex).toContain(utterance);
+    }
   });
 
   it("keeps CloudWatch retention explicit", () => {
