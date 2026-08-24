@@ -116,9 +116,9 @@ function localizedMessage(
       EndConversation: "La réponse synthétique à la demande est terminée.",
     },
     en_US: {
-      GetSupplierQuote: `For request ${'${quote.rfqId}'}, ${'${values.quantity}'} of ${'${values.requested}'} units are available at ${'${values.price}'} ${'${values.currency}'} per unit. Delivery on ${'${values.delivery}'}.`,
-      CheckRemainingQuantity: `The remaining ${'${values.remaining}'} units can be delivered on ${'${values.remainderDelivery}'}.`,
-      ConfirmOfferValidity: `The quote is valid until ${'${values.validUntil}'}.`,
+      GetSupplierQuote: `For request ${quote.rfqId}, ${values.quantity} of ${values.requested} units are available at ${values.price} ${values.currency} per unit. Delivery on ${values.delivery}.`,
+      CheckRemainingQuantity: `The remaining ${values.remaining} units can be delivered on ${values.remainderDelivery}.`,
+      ConfirmOfferValidity: `The quote is valid until ${values.validUntil}.`,
       ConfirmCommercialTerms: quote.commercialTermsChanged
         ? "Payment terms have changed from net 30 days to advance payment."
         : "The approved standard commercial terms remain unchanged.",
