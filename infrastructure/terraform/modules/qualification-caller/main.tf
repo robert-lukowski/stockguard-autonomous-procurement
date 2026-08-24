@@ -99,8 +99,10 @@ resource "aws_lambda_function" "this" {
   timeout     = 360
   memory_size = 256
 
-  # One live qualification may be in flight at a time.
-  reserved_concurrent_executions = 1
+  # Deliberately unreserved. This account must preserve Lambda's minimum
+  # unreserved concurrency pool, and an earlier positive reservation was
+  # rejected by AWS for exactly that reason. The Judge PIN and fixed destination
+  # bound the public demo instead of a reservation that this account cannot use.
 
   environment {
     variables = {
