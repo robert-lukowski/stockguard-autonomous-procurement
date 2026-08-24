@@ -142,6 +142,7 @@ export class ProcurementWorkflow {
     );
 
     for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
+      let knownCallId: string | null = null;
       try {
         let task = await withTimeout(
           this.supplierCalls.startSupplierCall(
@@ -150,6 +151,7 @@ export class ProcurementWorkflow {
           ),
           this.callPolicy.timeoutMs,
         );
+        knownCallId = task.callId;
 
         /*
          * Wait before each poll, never after a terminal one.
@@ -190,7 +192,7 @@ export class ProcurementWorkflow {
       } catch (error) {
         const timedOut = error instanceof Error && error.message === "CALL_TIMEOUT";
         lastTask = unresolvedTask(
-          `failed-${request.workflowId}-${request.supplierId}-${attempt}`,
+          knownCallId ?? `failed-${request.workflowId}-${request.supplierId}-${attempt}`,
           timedOut ? "TIMEOUT" : "FAILED",
           timedOut
             ? "CALL-E operation exceeded the configured timeout"

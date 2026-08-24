@@ -1,18 +1,10 @@
 import { Loader2, Lock, PhoneCall, ShieldCheck } from "lucide-react";
 import { useMemo, useState } from "react";
-import type { WorkflowResult } from "../server/workflow";
 import { RuntimeBadge } from "./RuntimeBadge";
-
-type LiveQualificationEnvelope = {
-  runtime: "LIVE_CALLE";
-  liveCall: {
-    callId: string | null;
-    outcome: string | null;
-    taskCompleted: boolean | null;
-    attemptCount: number | null;
-  } | null;
-  workflow: WorkflowResult;
-};
+import {
+  liveQualificationResultText,
+  type LiveQualificationEnvelope,
+} from "./liveQualificationResultText";
 
 type Phase = "idle" | "running" | "done";
 
@@ -249,7 +241,7 @@ export function LiveQualificationPanel() {
           )}
 
           <p className="mt-4 text-xs leading-relaxed text-ground-400">
-            The supplier intentionally changes payment terms. StockGuard therefore stops at human escalation instead of creating an autonomous purchase order.
+            {liveQualificationResultText(result)}
           </p>
         </div>
       )}

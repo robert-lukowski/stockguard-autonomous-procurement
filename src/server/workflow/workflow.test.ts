@@ -312,6 +312,57 @@ describe("ProcurementWorkflow", () => {
     expect(result.decision?.rejectedOffers[0].offer.attemptCount).toBe(1);
   });
 
+  it("preserves a real call ID when a later status poll times out", async () => {
+    let starts = 0;
+    const supplier = suppliers[0];
+    const adapter: SupplierCallingPort = {
+      async startSupplierCall() {
+        starts += 1;
+        return {
+          callId: "call-real-preserved",
+          status: "queued",
+          taskCompleted: false,
+          completionConfidence: null,
+          structuredResult: null,
+          evidence: [],
+          fieldEvidence: {},
+          schemaValidation: { valid: false, issues: [] },
+          outcome: "INCOMPLETE",
+        };
+      },
+      async getSupplierCall() {
+        throw new Error("CALL_TIMEOUT");
+      },
+    };
+    const workflow = new ProcurementWorkflow(
+      adapter,
+      new MockPurchaseOrderAdapter(),
+      () => new Date("2026-08-21T09:42:00Z"),
+      undefined,
+      new InMemoryWorkflowRunStore(),
+      { maximumAttempts: 1, maximumPolls: 1, timeoutMs: 50, pollIntervalMs: 0, initialPollDelayMs: 0 },
+      async () => {},
+    );
+
+    const result = await workflow.run(
+      workflowInput({
+        suppliers: [supplier],
+        callAuthorization: {
+          ...authorization,
+          maximumCalls: 1,
+          allowedSupplierIds: [supplier.supplierId],
+          allowedPhoneNumbers: [supplier.phoneE164],
+        },
+      }),
+    );
+
+    const completed = result.auditTimeline.find(({ type }) => type === "CALL_COMPLETED");
+    expect(starts).toBe(1);
+    expect(completed?.evidence.callId).toBe("call-real-preserved");
+    expect(completed?.evidence.outcome).toBe("TIMEOUT");
+    expect(String(completed?.evidence.callId)).not.toContain("failed-");
+  });
+
   it("retries a no-answer outcome once and then uses the completed quote", async () => {
     const baseAdapter = new MockCallEAdapter();
     let starts = 0;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_CALLE_HTTP_TIMEOUT_MS,
   MockCallEAdapter,
   type SupplierCallTask,
 } from "../calle";
@@ -159,6 +160,11 @@ describe("supplier call poll cadence", () => {
     expect(defaultCallExecutionPolicy.maximumAttempts).toBe(2);
     expect(defaultCallExecutionPolicy.pollIntervalMs).toBeGreaterThan(0);
     expect(defaultCallExecutionPolicy.initialPollDelayMs).toBeGreaterThan(0);
+    expect(DEFAULT_CALLE_HTTP_TIMEOUT_MS).toBe(30_000);
+    expect(defaultCallExecutionPolicy.timeoutMs).toBeGreaterThan(
+      DEFAULT_CALLE_HTTP_TIMEOUT_MS,
+    );
+    expect(defaultCallExecutionPolicy.timeoutMs).not.toBe(10_000);
   });
 
   it("waits long enough for a real conversation to finish", () => {
