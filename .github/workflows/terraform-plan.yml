@@ -206,6 +206,5 @@ jobs:
             grep -E '^(Plan:|No changes)' infrastructure/terraform/plan.txt || echo 'see job log'
             echo '```'
             echo ''
-            echo 'The custom qualification plan gate is intentionally not part of the deployment path.'
             echo 'Review the full plan in the job log before running Terraform Apply.'
           } >> "$GITHUB_STEP_SUMMARY"
