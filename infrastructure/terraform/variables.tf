@@ -62,7 +62,7 @@ variable "qualification_quantity" {
 
 variable "qualification_required_by" {
   type        = string
-  default     = "2026-08-28T12:00:00+02:00"
+  default     = "2026-09-30T12:00:00+02:00"
   description = "Synthetic required-by date used to derive delivery answers."
 }
 
@@ -82,7 +82,7 @@ variable "enable_call_recording" {
   type        = bool
   default     = false
   description = <<-EOT
-    Create the private recording bucket and attach it to the Connect instance.
+    Create the private recording bucket and attach it to Connect.
 
     Defaults to FALSE for the first deployment. Attaching a CALL_RECORDINGS
     storage configuration would replace whatever the Connect instance already
