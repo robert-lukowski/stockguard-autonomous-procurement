@@ -123,7 +123,11 @@ export function LiveQualificationPanel() {
           Run the real CALL-E demo
         </h2>
         <span className="ml-auto">
-          <RuntimeBadge id="LIVE_CALLE_CALL" size="sm" />
+          <RuntimeBadge
+            id="LIVE_CALLE_CALL"
+            size="sm"
+            availableOverride={result?.runtime === "LIVE_CALLE" ? true : undefined}
+          />
         </span>
       </div>
 
@@ -192,7 +196,7 @@ export function LiveQualificationPanel() {
       </div>
 
       {error && (
-        <p role="alert" className="mt-4 rounded-lg border border-danger-500/30 bg-danger-500/8 px-3 py-2 text-sm text-danger-300">
+        <p role="alert" className="mt-4 rounded-lg border border-block-500/30 bg-block-500/8 px-3 py-2 text-sm text-block-300">
           {error}
         </p>
       )}
