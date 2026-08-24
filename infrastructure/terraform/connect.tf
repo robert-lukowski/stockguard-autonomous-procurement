@@ -100,6 +100,10 @@ resource "aws_connect_contact_flow" "supplier_simulator" {
         Type       = "ConnectParticipantWithLexBot"
         Parameters = {
           LexV2Bot = { AliasArn = local.lex_bot_alias_arn }
+          # Connect requires Get customer input to carry a prompt. Keep the
+          # full supplier greeting in the preceding non-interruptible action;
+          # this is only the short handoff into the Lex listening turn.
+          Text = "Please go ahead."
         }
         Transitions = {
           NextAction = "disconnect"
