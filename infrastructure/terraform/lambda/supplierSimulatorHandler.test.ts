@@ -36,7 +36,7 @@ describe("supplier simulator Lambda composition root", () => {
   it("answers a quote in English without any RFQ in the session", async () => {
     const response = await lexFulfillment(event());
 
-    expect(response.messages[0].content).toContain("units are available");
+    expect(response.messages[0].content).toContain("8 units of CF-220 are available");
     expect(response.sessionState.sessionAttributes.simulatorStatus).toBe("SYNTHETIC");
     expect(response.sessionState.sessionAttributes.supplierProfileId).toBe(
       "EN_SUPPLIER",
@@ -86,7 +86,8 @@ describe("supplier simulator Lambda composition root", () => {
 
     const logged = String(log.mock.calls[0][0]);
     expect(logged).toContain("supplier_simulator_invocation");
-    expect(logged).not.toContain("units are available");
+    expect(logged).not.toContain("Ridgeline Industrial Supply");
+    expect(logged).not.toContain("CF-220");
     expect(logged).not.toContain("+1");
   });
 });

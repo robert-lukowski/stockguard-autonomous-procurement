@@ -66,7 +66,7 @@ describe("English multi-turn conversation", () => {
 
     expect(turn1.sessionState.sessionAttributes.simulatorStatus).toBe("SYNTHETIC");
     expect(turn1.sessionState.sessionAttributes.supplierProfileId).toBe("EN_SUPPLIER");
-    expect(turn1.messages[0].content).toContain("units are available");
+    expect(turn1.messages[0].content).toContain("8 units of CF-220 are available");
 
     // TURN 2 - the attributes turn 1 emitted are fed straight back, exactly as
     // Lex does on a real call. This is the turn that used to fail closed.

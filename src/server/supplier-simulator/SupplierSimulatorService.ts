@@ -16,6 +16,14 @@ function addDays(value: string, days: number): string {
   return date.toISOString();
 }
 
+function formatEnglishDate(value: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "long",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(value));
+}
+
 function quoteFor(
   profile: SyntheticSupplierProfile,
   rfq: SyntheticRfq,
@@ -94,6 +102,11 @@ function localizedMessage(
     delivery: quote.deliveryAt.slice(0, 10),
     remainderDelivery: quote.remainingDeliveryAt?.slice(0, 10) ?? "not available",
     validUntil: quote.offerValidUntil.slice(0, 10),
+    englishPrice: new Intl.NumberFormat("en-US", {
+      maximumFractionDigits: 2,
+    }).format(quote.unitPrice),
+    englishDelivery: formatEnglishDate(quote.deliveryAt),
+    englishValidUntil: formatEnglishDate(quote.offerValidUntil),
   };
 
   const messages: Record<LexSupplierLocale, Record<typeof intent, string>> = {
@@ -116,13 +129,13 @@ function localizedMessage(
       EndConversation: "La réponse synthétique à la demande est terminée.",
     },
     en_US: {
-      GetSupplierQuote: `For request ${quote.rfqId}, ${values.quantity} of ${values.requested} units are available at ${values.price} ${values.currency} per unit. Delivery on ${values.delivery}.`,
+      GetSupplierQuote: `Thanks for calling ${quote.supplierName}. Let me check that for you. Yes, I can confirm ${values.quantity} units of ${quote.sku} are available at ${values.englishPrice} ${values.currency} per unit, with delivery on ${values.englishDelivery}. The quote is valid until ${values.englishValidUntil}.`,
       CheckRemainingQuantity: `The remaining ${values.remaining} units can be delivered on ${values.remainderDelivery}.`,
       ConfirmOfferValidity: `The quote is valid until ${values.validUntil}.`,
       ConfirmCommercialTerms: quote.commercialTermsChanged
-        ? "Payment terms have changed from net 30 days to advance payment."
+        ? "There is one change I should mention. Our payment terms have changed from net 30 days to advance payment."
         : "The approved standard commercial terms remain unchanged.",
-      EndConversation: "That completes the synthetic quote response.",
+      EndConversation: `That covers everything from our side. Thank you for calling ${quote.supplierName}.`,
     },
     pl_PL: {
       GetSupplierQuote: `Dla zapytania ${quote.rfqId} dostępnych jest ${values.quantity} z ${values.requested} sztuk po ${values.price} ${values.currency} za sztukę. Dostawa: ${values.delivery}.`,

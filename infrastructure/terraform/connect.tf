@@ -48,8 +48,9 @@ removed {
 # The contact flow: the smallest thing that proves the vertical slice
 #   Connect -> Lex V2 alias -> Lambda synthetic supplier.
 #
-# Deliberately three actions. Everything previously here was either optional or
-# actively unhelpful for a first qualification call:
+# Deliberately four actions: logging, the primary Lex turn, one bounded retry,
+# and disconnect. Everything previously here was either optional or actively
+# unhelpful for a first qualification call:
 #
 #   UpdateContactTextToSpeechVoice  removed. Joanna is the documented default
 #                                   when the action never runs, and the Lex
@@ -82,20 +83,35 @@ resource "aws_connect_contact_flow" "supplier_simulator" {
         Identifier  = "set-logging"
         Type        = "UpdateFlowLoggingBehavior"
         Parameters  = { FlowLoggingBehavior = "Enabled" }
-        Transitions = { NextAction = "lex" }
+        Transitions = { NextAction = "lex-primary" }
       },
       {
-        Identifier = "lex"
+        Identifier = "lex-primary"
         Type       = "ConnectParticipantWithLexBot"
         Parameters = {
           # Text plays while gathering input. It is mutually exclusive with
           # PromptId and SSML, neither of which is set.
           LexV2Bot = { AliasArn = local.lex_bot_alias_arn }
-          Text     = "Ridgeline Industrial Supply, sales desk. How can I help?"
+          Text     = "Ridgeline Industrial Supply, sales desk. How can I help you today?"
         }
         Transitions = {
           NextAction = "disconnect"
           # NoMatchingError must always be defined on an action that can error.
+          Errors = [
+            { ErrorType = "NoMatchingCondition", NextAction = "lex-retry" },
+            { ErrorType = "NoMatchingError", NextAction = "lex-retry" },
+          ]
+        }
+      },
+      {
+        Identifier = "lex-retry"
+        Type       = "ConnectParticipantWithLexBot"
+        Parameters = {
+          LexV2Bot = { AliasArn = local.lex_bot_alias_arn }
+          Text     = "Sorry, I didn't catch that. Could you repeat what you're calling about?"
+        }
+        Transitions = {
+          NextAction = "disconnect"
           Errors = [
             { ErrorType = "NoMatchingCondition", NextAction = "disconnect" },
             { ErrorType = "NoMatchingError", NextAction = "disconnect" },

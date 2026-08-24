@@ -166,14 +166,14 @@ export class CallEApiAdapter implements SupplierCallingPort {
     const routingInstructions = syntheticRouting
       ? fixedQualification
         ? [
-            "The recipient is the deterministic synthetic supplier test harness, not a real company.",
+            "The recipient is the approved English qualification supplier endpoint.",
             "This endpoint is already pinned to the English qualification profile. Do not say or ask for a routing code; begin directly with the procurement qualification.",
             `The expected synthetic profile is ${syntheticRouting.supplierProfileId} and RFQ is ${syntheticRouting.rfqId}.`,
           ]
         : [
-            "The recipient is a deterministic synthetic supplier test harness, not a real company.",
+            "The recipient is the approved multilingual supplier qualification endpoint.",
             `At the initial English routing prompt, clearly say: routing code ${syntheticRouting.routingCode.split("").join(" ")}.`,
-            "Wait for the test harness to confirm the target language, then continue in the requested conversation locale.",
+            "Wait for the supplier endpoint to confirm the target language, then continue in the requested conversation locale.",
             `The expected synthetic profile is ${syntheticRouting.supplierProfileId} and RFQ is ${syntheticRouting.rfqId}.`,
           ]
       : [];
@@ -181,14 +181,24 @@ export class CallEApiAdapter implements SupplierCallingPort {
       syntheticRouting && !fixedQualification
         ? `Except for the short English routing phrase, use ${request.locale} throughout the supplier conversation.`
         : `Use ${request.locale} throughout the conversation.`;
+    const openingInstructions = fixedQualification
+      ? [
+          'After the greeting, say: "Hello, I\'m an AI procurement assistant calling on behalf of StockGuard for a supplier qualification demo. This call only requests supplier availability and commercial information and cannot create a binding order."',
+          `Then ask: "I'm checking availability for ${request.requestedQuantity} units of ${request.sku}. Can you confirm stock, unit price and earliest delivery?"`,
+        ]
+      : [
+          "After the greeting, disclose that you are an AI procurement assistant calling on behalf of StockGuard for a supplier qualification demo.",
+          "State that the call only requests supplier availability and commercial information and cannot create a binding order.",
+          `Confirm availability of ${request.requestedQuantity} units of SKU ${request.sku} before ${request.requiredBy}.`,
+        ];
     const task = [
       `Call the approved supplier ${request.supplierName}.`,
-      "Immediately disclose that you are an AI procurement assistant calling for a fictional test organization.",
-      "State that the call only requests availability information and cannot create a binding order.",
+      "When the call connects, wait for the recipient's greeting to finish before speaking. Do not interrupt or speak over the recipient's opening greeting.",
       ...routingInstructions,
       languageInstruction,
-      `Confirm availability of ${request.requestedQuantity} units of SKU ${request.sku} before ${request.requiredBy}.`,
+      ...openingInstructions,
       "Collect unit price, currency, earliest delivery, offer validity, and any changed commercial terms.",
+      "If the recipient provides offer validity in the first response, do not ask for it again.",
       "Ask at least one follow-up question specifically about the commercial or payment terms.",
       "If the recipient opts out, stop the conversation and record the opt-out.",
       "Do not collect payment data, credentials, access codes, or unrelated personal information.",

@@ -211,7 +211,23 @@ describe("CallEApiAdapter", () => {
     const [, options] = fetchImplementation.mock.calls[0];
     const body = JSON.parse(options.body as string);
     expect(body.task).not.toContain("routing code 0 0 0 0 0 1");
+    expect(body.task).not.toMatch(
+      /fictional test organization|fictional organization|fake company|test harness/i,
+    );
+    expect(body.task).toContain("calling on behalf of StockGuard");
+    expect(body.task).toContain(
+      "wait for the recipient's greeting to finish before speaking",
+    );
+    expect(body.task).toContain(
+      "Do not interrupt or speak over the recipient's opening greeting",
+    );
     expect(body.task).toContain("already pinned to the English qualification profile");
+    expect(body.task).toContain(
+      "I'm checking availability for 8 units of CF-220. Can you confirm stock, unit price and earliest delivery?",
+    );
+    expect(body.task).toContain(
+      "If the recipient provides offer validity in the first response, do not ask for it again",
+    );
     expect(body.task).toContain("Ask at least one follow-up question specifically about the commercial or payment terms");
     expect(body.recipients[0]).toEqual({
       phones: [syntheticRequest.phoneE164],

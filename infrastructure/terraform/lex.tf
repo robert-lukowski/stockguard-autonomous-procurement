@@ -105,6 +105,13 @@ resource "aws_lexv2models_intent" "get_supplier_quote" {
   sample_utterance { utterance = "Can you quote me for this material" }
   sample_utterance { utterance = "I need a quote" }
   sample_utterance { utterance = "When could you deliver" }
+  sample_utterance { utterance = "I'm an AI procurement assistant calling on behalf of StockGuard" }
+  sample_utterance { utterance = "I'm calling on behalf of StockGuard for a supplier qualification" }
+  sample_utterance { utterance = "I'm calling to check availability for this item" }
+  sample_utterance { utterance = "I need to confirm availability and pricing" }
+  sample_utterance { utterance = "Can you confirm stock unit price and delivery" }
+  sample_utterance { utterance = "I'm checking availability for eight units" }
+  sample_utterance { utterance = "This call requests supplier availability and commercial information" }
 
   fulfillment_code_hook {
     enabled = true
@@ -198,7 +205,7 @@ resource "terraform_data" "lex_locale_build" {
     # build left version 1 - cut from an unbuilt draft - still serving. Bumping
     # this replaces the build, which cuts a fresh version from a built draft.
     # Bump again only to force the same sequence by hand.
-    "generation-2",
+    "generation-3",
     aws_lexv2models_bot_locale.en.id,
     aws_lexv2models_intent.get_supplier_quote.id,
     aws_lexv2models_intent.confirm_commercial_terms.id,
