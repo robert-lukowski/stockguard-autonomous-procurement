@@ -144,6 +144,24 @@ describe("infrastructure invariants", () => {
     }
   });
 
+  it("enables Bedrock Assisted NLU only as a fallback to classic Lex NLU", () => {
+    const lex = tf("lex.tf");
+    expect(lex).toContain('Action   = "bedrock:InvokeModel"');
+    expect(lex).toContain('Resource = "arn:aws:bedrock:*::foundation-model/*"');
+    expect(lex).toContain("aws lexv2-models update-bot-locale");
+    expect(lex).toContain('"enabled":true,"assistedNluMode":"Fallback"');
+    expect(lex).not.toContain('"assistedNluMode":"Primary"');
+    expect(lex).toContain("generation-4-assisted-nlu-fallback");
+  });
+
+  it("exposes offer validity as a first-class natural-language intent", () => {
+    const lex = tf("lex.tf");
+    expect(lex).toContain('name        = "ConfirmOfferValidity"');
+    expect(lex).toContain("How long is the quote valid");
+    expect(lex).toContain("When does this offer expire");
+    expect(lex).toContain("aws_lexv2models_intent.confirm_offer_validity.id");
+  });
+
   it("keeps CloudWatch retention explicit", () => {
     expect(tf("lambda.tf")).toContain("retention_in_days");
     expect(tf("variables.tf")).toMatch(

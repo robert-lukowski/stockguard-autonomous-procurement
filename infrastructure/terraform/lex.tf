@@ -66,6 +66,23 @@ resource "aws_iam_role_policy" "lex_bot" {
   })
 }
 
+# Assisted NLU is powered by Amazon Bedrock. Lex selects the model for this
+# managed feature, so there is no stable model id to pin here. Scope the bot
+# role to foundation-model invocation only, matching AWS's own Lex guidance.
+resource "aws_iam_role_policy" "lex_bedrock_assisted_nlu" {
+  name = "bedrock-assisted-nlu"
+  role = aws_iam_role.lex_bot.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "InvokeBedrockForAssistedNlu"
+      Effect   = "Allow"
+      Action   = "bedrock:InvokeModel"
+      Resource = "arn:aws:bedrock:*::foundation-model/*"
+    }]
+  })
+}
+
 resource "aws_lexv2models_bot_locale" "en" {
   bot_id                           = aws_lexv2models_bot.supplier_simulator.id
   bot_version                      = "DRAFT"
@@ -81,6 +98,11 @@ resource "aws_lexv2models_bot_locale" "en" {
 # --- Intents -----------------------------------------------------------------
 # Architecture A needs no slots: there is one fixed profile and no routing code
 # to capture. The handler's `qualificationRfqId` entry mode supplies the RFQ.
+#
+# Intent names are deliberately short and self-explanatory and descriptions are
+# explicit about their business purpose. AWS recommends both when Assisted NLU
+# is enabled because the LLM uses this configured intent surface to interpret
+# natural phrasing without inventing new intents or changing business logic.
 
 # SERVICE-POPULATED SETTINGS
 #
@@ -96,7 +118,7 @@ resource "aws_lexv2models_intent" "get_supplier_quote" {
   bot_version = aws_lexv2models_bot_locale.en.bot_version
   locale_id   = aws_lexv2models_bot_locale.en.locale_id
   name        = "GetSupplierQuote"
-  description = "CALL-E asks whether the material is available and at what price."
+  description = "Collect supplier availability, quantity, unit price, currency and earliest delivery for the requested material."
 
   sample_utterance { utterance = "I am calling about a purchase request" }
   sample_utterance { utterance = "Do you have this part in stock" }
@@ -129,17 +151,43 @@ resource "aws_lexv2models_intent" "get_supplier_quote" {
   }
 }
 
+resource "aws_lexv2models_intent" "confirm_offer_validity" {
+  bot_id      = aws_lexv2models_bot.supplier_simulator.id
+  bot_version = aws_lexv2models_bot_locale.en.bot_version
+  locale_id   = aws_lexv2models_bot_locale.en.locale_id
+  name        = "ConfirmOfferValidity"
+  description = "Confirm how long the supplier quote remains valid and when the commercial offer expires."
+
+  sample_utterance { utterance = "How long is the quote valid" }
+  sample_utterance { utterance = "When does this offer expire" }
+  sample_utterance { utterance = "Until when is the quote valid" }
+  sample_utterance { utterance = "Is this price still valid" }
+
+  fulfillment_code_hook {
+    enabled = true
+  }
+
+  lifecycle {
+    ignore_changes = [
+      initial_response_setting,
+      fulfillment_code_hook[0].post_fulfillment_status_specification,
+    ]
+  }
+}
+
 resource "aws_lexv2models_intent" "confirm_commercial_terms" {
   bot_id      = aws_lexv2models_bot.supplier_simulator.id
   bot_version = aws_lexv2models_bot_locale.en.bot_version
   locale_id   = aws_lexv2models_bot_locale.en.locale_id
   name        = "ConfirmCommercialTerms"
-  description = "The follow-up that surfaces the changed payment terms."
+  description = "Confirm whether standard commercial or payment terms changed, including a change from net terms to advance payment."
 
   sample_utterance { utterance = "Are the commercial terms unchanged" }
   sample_utterance { utterance = "What are the payment terms" }
   sample_utterance { utterance = "Has anything changed in the terms" }
   sample_utterance { utterance = "Are your standard terms still valid" }
+  sample_utterance { utterance = "Would our usual payment terms still apply" }
+  sample_utterance { utterance = "Is there anything different about how we need to pay" }
 
   fulfillment_code_hook {
     enabled = true
@@ -158,11 +206,12 @@ resource "aws_lexv2models_intent" "end_conversation" {
   bot_version = aws_lexv2models_bot_locale.en.bot_version
   locale_id   = aws_lexv2models_bot_locale.en.locale_id
   name        = "EndConversation"
-  description = "Closes the synthetic quote conversation."
+  description = "Close the supplier qualification after CALL-E has collected the required commercial facts."
 
   sample_utterance { utterance = "That is everything thank you" }
   sample_utterance { utterance = "Thank you goodbye" }
   sample_utterance { utterance = "That is all I needed" }
+  sample_utterance { utterance = "We're all set thank you" }
 
   fulfillment_code_hook {
     enabled = true
@@ -176,47 +225,56 @@ resource "aws_lexv2models_intent" "end_conversation" {
   }
 }
 
-# FallbackIntent is built in and always present. The Lambda guard fails closed
-# on anything it does not recognise, so no extra resource is required here.
+# FallbackIntent is built in and always present. Assisted NLU in Fallback mode
+# gets one chance to recover natural phrasing when classic NLU is below the
+# configured confidence threshold or would otherwise route to FallbackIntent.
+# If it still cannot map the utterance to one of our configured intents, the
+# existing fail-closed behavior remains unchanged.
 
 # ---------------------------------------------------------------------------
 # Build the DRAFT locale.
 #
-# PROVIDER GAP: the aws provider has no way to build a Lex V2 locale. Building
-# is an API-only operation (BuildBotLocale) and it targets DRAFT only.
+# PROVIDER GAPS:
+#   - hashicorp/aws cannot build a Lex V2 locale.
+#   - as of hashicorp/aws ~> 6.0, aws_lexv2models_bot_locale also does not
+#     expose generativeAISettings.runtimeSettings.nluImprovement.
 #
-# This is not cosmetic. A bot version is an immutable SNAPSHOT of DRAFT taken
-# at creation time, so a version cut from a NotBuilt DRAFT is permanently
-# NotBuilt and the bot cannot answer a call. That is exactly what the first
-# deployment produced, and what the post-apply verification caught:
-#
-#   FAIL  locale en_US on served version 1 is NotBuilt - the bot cannot answer
-#
-# So the build has to happen BETWEEN the intents and the version, which is why
-# it is a provisioner rather than a step in the workflow: only Terraform can
-# sequence it there.
+# Both settings therefore have to be sequenced through the AWS Lex V2 API
+# immediately before BuildBotLocale. This keeps the deployed numbered version
+# deterministic: Assisted NLU is configured on DRAFT, DRAFT is built, then the
+# immutable version is cut from that exact built state.
 # ---------------------------------------------------------------------------
 resource "terraform_data" "lex_locale_build" {
-  # Rebuild whenever the conversational surface changes, so a new intent
-  # cannot quietly ship inside an unbuilt locale.
+  # Rebuild whenever the conversational surface changes, so a new intent or
+  # Assisted NLU configuration cannot quietly ship inside an unbuilt locale.
   triggers_replace = [
-    # Generation counter. replace_triggered_by fires when this resource is
-    # REPLACED, not when it is first created, so the apply that introduced the
-    # build left version 1 - cut from an unbuilt draft - still serving. Bumping
-    # this replaces the build, which cuts a fresh version from a built draft.
-    # Bump again only to force the same sequence by hand.
-    "generation-3",
+    # Generation counter. Bump only when the out-of-provider locale runtime
+    # configuration changes or a forced rebuild is intentionally required.
+    "generation-4-assisted-nlu-fallback",
     aws_lexv2models_bot_locale.en.id,
     aws_lexv2models_intent.get_supplier_quote.id,
+    aws_lexv2models_intent.confirm_offer_validity.id,
     aws_lexv2models_intent.confirm_commercial_terms.id,
     aws_lexv2models_intent.end_conversation.id,
   ]
+
+  depends_on = [aws_iam_role_policy.lex_bedrock_assisted_nlu]
 
   provisioner "local-exec" {
     interpreter = ["/bin/bash", "-c"]
     command     = <<-EOT
       set -euo pipefail
       BOT=${aws_lexv2models_bot.supplier_simulator.id}
+
+      # Assisted NLU intentionally runs in Fallback mode: classic NLU remains
+      # the fast primary path, while Bedrock helps only when confidence falls
+      # below 0.40 or Lex would otherwise route to FallbackIntent.
+      aws lexv2-models update-bot-locale --region ${var.aws_region} \
+        --bot-id "$BOT" --bot-version DRAFT --locale-id ${local.lex_locale_id} \
+        --nlu-intent-confidence-threshold 0.40 \
+        --generative-ai-settings '{"runtimeSettings":{"nluImprovement":{"enabled":true,"assistedNluMode":"Fallback"}}}' \
+        >/dev/null
+
       aws lexv2-models build-bot-locale --region ${var.aws_region} \
         --bot-id "$BOT" --bot-version DRAFT --locale-id ${local.lex_locale_id} >/dev/null
       for _ in $(seq 1 60); do
@@ -224,7 +282,7 @@ resource "terraform_data" "lex_locale_build" {
           --bot-id "$BOT" --bot-version DRAFT --locale-id ${local.lex_locale_id} \
           --query botLocaleStatus --output text)"
         case "$STATUS" in
-          Built) echo "locale built"; exit 0 ;;
+          Built) echo "locale built with Assisted NLU fallback"; exit 0 ;;
           Failed) echo "locale build FAILED" >&2; exit 1 ;;
         esac
         sleep 5
