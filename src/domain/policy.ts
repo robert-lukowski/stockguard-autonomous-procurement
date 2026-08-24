@@ -1,3 +1,4 @@
+import { roundCurrency } from "./normalization";
 import type {
   NormalizedOffer,
   PolicyCheck,
@@ -91,11 +92,22 @@ export function validateOffer(
       `€${offer.unitPriceEur.toFixed(2)} per unit; ceiling €${policy.unitPriceCeilingEur.toFixed(2)}`,
       { unitPriceEur: offer.unitPriceEur, ceilingEur: policy.unitPriceCeilingEur },
     ),
+    // The PO is created for forecast.requiredQuantity, never for the (possibly
+    // larger) offer.availableQuantity - see ProcurementWorkflow's purchase-order
+    // construction. Budget must be checked against what will actually be
+    // spent, not against a total priced at a quantity nobody is ordering.
     check(
       "total_within_autonomy_limit",
-      offer.totalPriceEur <= policy.autonomousOrderLimitEur ? "PASS" : "FAIL",
-      `€${offer.totalPriceEur.toFixed(2)} total; limit €${policy.autonomousOrderLimitEur.toFixed(2)}`,
-      { totalPriceEur: offer.totalPriceEur, limitEur: policy.autonomousOrderLimitEur },
+      roundCurrency(offer.unitPriceEur * forecast.requiredQuantity) <=
+        policy.autonomousOrderLimitEur
+        ? "PASS"
+        : "FAIL",
+      `€${roundCurrency(offer.unitPriceEur * forecast.requiredQuantity).toFixed(2)} order total for ${forecast.requiredQuantity} units; limit €${policy.autonomousOrderLimitEur.toFixed(2)}`,
+      {
+        orderTotalEur: roundCurrency(offer.unitPriceEur * forecast.requiredQuantity),
+        orderQuantity: forecast.requiredQuantity,
+        limitEur: policy.autonomousOrderLimitEur,
+      },
     ),
     evidenceAware(
       offer,
