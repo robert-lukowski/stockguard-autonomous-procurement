@@ -2,8 +2,9 @@
  * Runtime classification.
  *
  * Every surface that shows a result must state which runtime produced it.
- * These five labels are the only permitted values, and the two live ones are
- * deliberately not reachable from the public build - see `available`.
+ * These five labels are the only permitted values. Availability describes the
+ * final deployed judge build; a result may still use the live label only when
+ * the backend itself reports LIVE_CALLE for that run.
  */
 export type RuntimeClassificationId =
   | "MOCK_RUNTIME"
@@ -17,7 +18,7 @@ export type RuntimeClassification = {
   label: string;
   /** One line a judge can read without prior context. */
   meaning: string;
-  /** False when nothing in this build can produce it. */
+  /** Whether the final judge build contains a path that can produce it. */
   available: boolean;
   /** Tailwind classes. Colour is semantic, not decorative. */
   tone: string;
@@ -60,7 +61,7 @@ export const runtimeClassifications: Record<
     label: "Live CALL-E Call",
     meaning:
       "A real outbound telephone call placed through CALL-E right now.",
-    available: false,
+    available: true,
     tone: "border-review-500/40 bg-review-500/10 text-review-300",
     dot: "bg-review-500",
   },
@@ -103,12 +104,9 @@ export const decisionTone: Record<
 };
 
 /**
- * Maps a runtime reported by the Judge backend onto a classification.
- *
- * The registry above stays a set of immutable definitions: nothing in the
- * frontend may flip `LIVE_CALLE_CALL.available`. A live badge is earned only
- * by a backend that reports `LIVE_CALLE` for an actual run — never by the mere
- * presence of a configured backend URL.
+ * Maps a runtime reported by a backend onto a classification. A live badge is
+ * earned only by a backend that reports LIVE_CALLE for an actual run — never
+ * by the mere presence of a configured backend URL.
  */
 export function classificationForBackendRuntime(
   runtime: "LIVE_CALLE" | "MOCK",
