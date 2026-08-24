@@ -143,6 +143,5 @@ jobs:
             echo ''
             echo "simulator_enabled: \`${{ inputs.simulator_enabled }}\`"
             echo ''
-            echo 'The custom qualification plan gate is intentionally not part of the deployment path.'
             echo 'Recording is not controlled by this workflow; configure it separately in Amazon Connect when needed.'
           } >> "$GITHUB_STEP_SUMMARY"

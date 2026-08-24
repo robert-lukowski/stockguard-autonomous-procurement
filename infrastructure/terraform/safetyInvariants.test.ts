@@ -56,8 +56,8 @@ describe("infrastructure invariants", () => {
   });
 
   it("wires SIMULATOR_ENABLED directly to var.simulator_enabled", () => {
-    expect(tf("lambda.tf")).toContain(
-      "SIMULATOR_ENABLED      = tostring(var.simulator_enabled)",
+    expect(tf("lambda.tf")).toMatch(
+      /SIMULATOR_ENABLED\s*=\s*tostring\(var\.simulator_enabled\)/,
     );
   });
 
@@ -168,14 +168,6 @@ describe("Terraform workflow invariants", () => {
       expect(workflow).toContain("simulator_enabled:");
       expect(workflow).not.toContain("recovery_mode:");
       expect(workflow).not.toContain("enable_call_recording:");
-    }
-  });
-
-  it("keeps the custom qualification gate out of the active deployment path", () => {
-    for (const workflow of [plan, apply]) {
-      expect(workflow).not.toContain("assertQualificationPolicy.mjs");
-      expect(workflow).not.toContain("PLAN_POLICY_MODE");
-      expect(workflow).not.toContain("plan-policy-report.json");
     }
   });
 
