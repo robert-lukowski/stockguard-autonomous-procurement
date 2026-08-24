@@ -60,6 +60,36 @@ describe("English synthetic supplier", () => {
     expect(first.message).toContain("units are available");
     expect(first.quote.locale).toBe("en_US");
     expect(first.quote.deterministic).toBe(true);
+
+    // The message must speak real values, not literal template placeholders.
+    // "units are available" is fixed text and survives an un-interpolated
+    // template, so it cannot catch that bug on its own - these assertions can.
+    expect(first.message).not.toContain("${");
+    expect(first.message).toContain(rfq.rfqId);
+    expect(first.message).toContain(String(first.quote.availableQuantity));
+    expect(first.message).toContain(first.quote.unitPrice.toFixed(2));
+    expect(first.message).toContain(first.quote.currency);
+    expect(first.message).toContain(first.quote.deliveryAt.slice(0, 10));
+  });
+
+  it("interpolates every English intent that carries quote values", async () => {
+    // GetSupplierQuote is exercised above; the other two value-bearing English
+    // intents shared the same placeholder bug and need the same guard.
+    for (const intent of ["CheckRemainingQuantity", "ConfirmOfferValidity"] as const) {
+      const response = await service().respond({
+        intent,
+        rfqId: rfq.rfqId,
+        profileId: "EN_SUPPLIER",
+      });
+      expect(response.message).not.toContain("${");
+    }
+
+    const validity = await service().respond({
+      intent: "ConfirmOfferValidity",
+      rfqId: rfq.rfqId,
+      profileId: "EN_SUPPLIER",
+    });
+    expect(validity.message).toContain(validity.quote.offerValidUntil.slice(0, 10));
   });
 
   it("states the changed commercial terms in English", async () => {
