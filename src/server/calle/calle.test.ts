@@ -167,6 +167,59 @@ describe("CallEApiAdapter", () => {
     });
   });
 
+  it("skips the routing-code prompt for the fixed English qualification endpoint", async () => {
+    const fetchImplementation = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ call_id: "call-en-qualification", status: "queued" }),
+        { status: 200 },
+      ),
+    );
+    const syntheticRequest: SupplierCallRequest = {
+      ...request,
+      supplierId: "supplier-en-01",
+      supplierName: "Ridgeline Industrial Supply",
+      locale: "en-US",
+      region: "US",
+      syntheticRouting: {
+        kind: "SYNTHETIC_SUPPLIER_SIMULATOR",
+        rfqId: "RFQ-EN-QUALIFICATION",
+        routingCode: "000001",
+        supplierProfileId: "EN_SUPPLIER",
+        datasetVersion: "synthetic-suppliers-2026-08-v1",
+      },
+    };
+    const syntheticAuthorization: CallAuthorization = {
+      ...authorization,
+      allowedSupplierIds: [syntheticRequest.supplierId],
+      allowedPhoneNumbers: [syntheticRequest.phoneE164],
+    };
+    const adapter = new CallEApiAdapter({
+      apiKey: "test-only",
+      realCallsEnabled: true,
+      fetchImplementation,
+      syntheticSupplierSimulator: {
+        enabled: true,
+        phoneE164: syntheticRequest.phoneE164,
+        region: "US",
+        allowedProfileIds: ["EN_SUPPLIER"],
+        routingMode: "fixed-qualification",
+      },
+    });
+
+    await adapter.startSupplierCall(syntheticRequest, syntheticAuthorization);
+
+    const [, options] = fetchImplementation.mock.calls[0];
+    const body = JSON.parse(options.body as string);
+    expect(body.task).not.toContain("routing code 0 0 0 0 0 1");
+    expect(body.task).toContain("already pinned to the English qualification profile");
+    expect(body.task).toContain("Ask at least one follow-up question specifically about the commercial or payment terms");
+    expect(body.recipients[0]).toEqual({
+      phones: [syntheticRequest.phoneE164],
+      region: "US",
+      locale: "en-US",
+    });
+  });
+
   it("fails closed when simulator routing is not explicitly enabled", async () => {
     const adapter = new CallEApiAdapter({
       apiKey: "test-only",
