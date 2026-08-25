@@ -88,6 +88,10 @@ resource "aws_connect_contact_flow" "supplier_simulator" {
         Type       = "UpdateContactRecordingBehavior"
         Parameters = {
           RecordingBehavior = {
+            # Required by the Connect flow-language shape. An empty list keeps
+            # agent/customer recording off while IVR recording is controlled
+            # independently by the feature toggle.
+            RecordedParticipants = []
             IVRRecordingBehavior = var.enable_call_recording ? "Enabled" : "Disabled"
           }
         }

@@ -108,9 +108,13 @@ describe("infrastructure invariants", () => {
     );
     const recording = connect.slice(recordingStart, greetingStart);
     expect(recording).toContain('Type       = "UpdateContactRecordingBehavior"');
-    expect(recording).toContain(
-      'IVRRecordingBehavior = var.enable_call_recording ? "Enabled" : "Disabled"',
+    expect(recording).toMatch(
+      /RecordingBehavior = {\s*(?:#[^\n]*\s*)*RecordedParticipants = \[\]\s*IVRRecordingBehavior = var\.enable_call_recording \? "Enabled" : "Disabled"\s*}/,
     );
+    expect(recording).not.toContain('"Agent"');
+    expect(recording).not.toContain('"Customer"');
+    expect(recording).not.toContain("ScreenRecordedParticipants");
+    expect(recording).not.toContain("AnalyticsBehavior");
     expect(recording).toContain('NextAction = "supplier-greeting"');
     expect(recording).not.toContain("Errors");
     expect(recording).not.toMatch(/NextAction = "lex-(?:primary|retry)"/);
