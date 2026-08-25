@@ -43,7 +43,7 @@ describe("infrastructure invariants", () => {
     );
   });
 
-  it("keeps Terraform-managed recording disabled by default", () => {
+  it("keeps optional recording disabled by default", () => {
     expect(tf("variables.tf")).toMatch(
       /variable "enable_call_recording"[\s\S]*?default\s*=\s*false/,
     );
@@ -66,8 +66,10 @@ describe("infrastructure invariants", () => {
     expect(allTf).not.toContain("aws_connect_phone_number");
   });
 
-  it("commits no account id or E.164 phone number in Terraform", () => {
-    expect(allTf).not.toMatch(/\b\d{12}\b/);
+  it("commits no E.164 number and only the approved recording KMS account id", () => {
+    const approvedKmsArn =
+      "arn:aws:kms:eu-central-1:854010287302:key/00a17f01-a252-43f7-a803-d3e5df363c9b";
+    expect(allTf.replace(approvedKmsArn, "")).not.toMatch(/\b\d{12}\b/);
     expect(allTf).not.toMatch(/\+1\d{6,}/);
   });
 
@@ -106,7 +108,9 @@ describe("infrastructure invariants", () => {
     );
     const recording = connect.slice(recordingStart, greetingStart);
     expect(recording).toContain('Type       = "UpdateContactRecordingBehavior"');
-    expect(recording).toContain('IVRRecordingBehavior = "Enabled"');
+    expect(recording).toContain(
+      'IVRRecordingBehavior = var.enable_call_recording ? "Enabled" : "Disabled"',
+    );
     expect(recording).toContain('NextAction = "supplier-greeting"');
     expect(recording).not.toContain("Errors");
     expect(recording).not.toMatch(/NextAction = "lex-(?:primary|retry)"/);
@@ -203,29 +207,42 @@ describe("infrastructure invariants", () => {
     );
   });
 
-  it("keeps recordings private, encrypted, lifecycle-bounded, and attached once", () => {
-    const recording = tf("recording.tf");
-    for (const resource of [
-      'resource "aws_s3_bucket" "recordings"',
-      'resource "aws_s3_bucket_public_access_block" "recordings"',
+  it("declares no recording bucket or Connect storage association", () => {
+    expect(allTf).not.toContain('resource "aws_s3_bucket" "recordings"');
+    expect(allTf).not.toContain('resource "aws_s3_bucket_public_access_block" "recordings"');
+    expect(allTf).not.toContain('resource "aws_s3_bucket_versioning" "recordings"');
+    expect(allTf).not.toContain(
       'resource "aws_s3_bucket_server_side_encryption_configuration" "recordings"',
+    );
+    expect(allTf).not.toContain(
       'resource "aws_s3_bucket_lifecycle_configuration" "recordings"',
+    );
+    expect(allTf).not.toContain('resource "aws_s3_bucket_policy" "recordings"');
+    expect(allTf).not.toContain(
       'resource "aws_connect_instance_storage_config" "call_recordings"',
-    ]) {
-      expect(recording).toContain(resource);
-    }
-    for (const setting of [
-      "block_public_acls       = true",
-      "block_public_policy     = true",
-      "ignore_public_acls      = true",
-      "restrict_public_buckets = true",
-      'sse_algorithm = "AES256"',
-      "days = var.recording_retention_days",
-      'resource_type = "CALL_RECORDINGS"',
-      "bucket_prefix = local.recording_prefix",
-    ]) {
-      expect(recording).toContain(setting);
-    }
+    );
+  });
+
+  it("pins the pre-existing recording storage as non-secret qualification defaults", () => {
+    const variables = tf("variables.tf");
+    const root = tf("main.tf");
+    const caller = tf("qualification-caller.tf");
+    expect(variables).toMatch(
+      /variable "recording_bucket_name"[\s\S]*?default\s*=\s*"amazon-connect-93f5db840470"/,
+    );
+    expect(variables).toMatch(
+      /variable "recording_prefix"[\s\S]*?default\s*=\s*"connect\/robert-support\/CallRecordings"/,
+    );
+    expect(variables).toMatch(
+      /variable "recording_kms_key_arn"[\s\S]*?default\s*=\s*"arn:aws:kms:eu-central-1:854010287302:key\/00a17f01-a252-43f7-a803-d3e5df363c9b"/,
+    );
+    expect(variables).toContain("Terraform never creates or owns the bucket or storage");
+    expect(root).toContain(
+      'recording_bucket_arn      = "arn:aws:s3:::${var.recording_bucket_name}"',
+    );
+    expect(caller).toContain("recording_bucket_name     = var.recording_bucket_name");
+    expect(caller).toContain("recording_prefix          = var.recording_prefix");
+    expect(caller).toContain("recording_kms_key_arn     = var.recording_kms_key_arn");
   });
 
   it("gives only the caller scoped recording lookup permissions and environment", () => {
@@ -239,10 +256,16 @@ describe("infrastructure invariants", () => {
     const pkg = JSON.parse(repoFile("package.json"));
 
     expect(caller).toContain('Action   = ["s3:ListBucket"]');
-    expect(caller).toContain('"s3:prefix"');
+    expect(caller).toContain('"s3:prefix" = [');
+    expect(caller).toContain('"${var.recording_prefix}/*"');
     expect(caller).toContain('Action   = ["s3:GetObject"]');
     expect(caller).toContain('Resource = "${var.recording_bucket_arn}/${var.recording_prefix}/*"');
+    expect(caller).toContain('Action   = ["kms:Decrypt"]');
+    expect(caller).toContain("Resource = var.recording_kms_key_arn");
     expect(caller).not.toMatch(/Action\s*=\s*\["s3:\*"\]/);
+    expect(caller).not.toMatch(/Action\s*=\s*\["kms:\*"\]/);
+    expect(caller).not.toContain("kms:DescribeKey");
+    expect(caller).not.toContain("kms:GenerateDataKey");
     for (const variable of [
       "RECORDING_ENABLED",
       "RECORDING_BUCKET",
@@ -251,7 +274,7 @@ describe("infrastructure invariants", () => {
     ]) {
       expect(caller).toContain(variable);
     }
-    expect(tf("recording.tf")).toContain("recording_url_ttl_seconds = 300");
+    expect(tf("main.tf")).toContain("recording_url_ttl_seconds = 300");
     expect(pkg.dependencies["@aws-sdk/client-s3"]).toBeDefined();
     expect(pkg.dependencies["@aws-sdk/s3-request-presigner"]).toBeDefined();
     expect(pkg.scripts["build:lambda"]).not.toContain("external:@aws-sdk/client-s3");

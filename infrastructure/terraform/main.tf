@@ -3,6 +3,9 @@ locals {
 
   connect_instance_arn = "arn:aws:connect:${var.aws_region}:${var.aws_account_id}:instance/${var.connect_instance_id}"
 
+  recording_bucket_arn      = "arn:aws:s3:::${var.recording_bucket_name}"
+  recording_url_ttl_seconds = 300
+
   # Architecture A is English only. DE and FR locales are added later as extra
   # aws_lexv2models_bot_locale resources on this same bot, which is why the
   # first qualification does not constrain the final design.

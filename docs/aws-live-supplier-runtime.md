@@ -77,7 +77,7 @@ Re-verified against `hashicorp/aws ~> 6.0`:
 |---|---|---|
 | Lex V2 bot, locale, intents, version | Terraform native | `aws_lexv2models_*` |
 | Contact flow | Terraform native | `aws_connect_contact_flow` |
-| Recording storage | Terraform native | `aws_connect_instance_storage_config` |
+| Recording storage | Pre-existing Amazon Connect infrastructure | Reused, never imported or managed |
 | **Lex V2 bot alias** | **Cloud Control** | `awscc_lex_bot_alias` — no `aws_lexv2models_bot_alias` exists ([#35780](https://github.com/hashicorp/terraform-provider-aws/issues/35780), [#36044](https://github.com/hashicorp/terraform-provider-aws/issues/36044)) |
 | **Connect ↔ Lex V2 association** | **Controlled CLI step** | `aws_connect_bot_association` is Lex V1 only ([#30869](https://github.com/hashicorp/terraform-provider-aws/issues/30869)) |
 | Number → flow assignment | Manual | Connect console, during approved deployment only |
@@ -172,19 +172,19 @@ providers reproducibly.
   gate is enforced by IAM, not only by GitHub.
 - `realCallsEnabled` is untouched. No CALL-E credential exists in AWS.
 
-## Recording — optional but enabled
+## Recording — optional, using pre-existing Connect storage
 
-Enabled by default (`enable_call_recording`). Private bucket, public access
-blocked, SSE-S3, 30-day lifecycle, bucket policy scoped to this Connect
-instance by `aws:SourceArn`, TLS required.
+Disabled by default (`enable_call_recording=false`). When enabled, the contact
+flow records the automated interaction and the live caller reads only from the
+pre-existing `amazon-connect-93f5db840470` bucket under
+`connect/robert-support/CallRecordings`. The existing Connect association uses
+its pre-existing customer-managed KMS key. Terraform does not create, import or
+own the recording bucket or the `CALL_RECORDINGS` storage association.
 
 Recording is **not** a decision source. Authority stays with the CALL-E
 structured result, the transcript evidence and the deterministic Policy
-Gateway. Nothing under `src/` reads this bucket.
-
-Both parties are ours and every persona is fictional, so there is no personal
-data and SSE-S3 is sufficient. Recording a real human would require their
-consent and disclosure, and should be reconsidered then.
+Gateway. The browser receives only a short-lived presigned URL; the bucket
+remains private.
 
 ## Not deployed in this change
 

@@ -70,9 +70,10 @@ While you are there, note two things that decide a later switch:
 - the existing `+1` number's **current contact-flow association**, so it can be
   restored later
 
-**Do not change the `+1` assignment in this phase.** If a `CALL_RECORDINGS`
-config already exists, leave `enable_call_recording` at `false` — attaching
-ours would replace it.
+**Do not change the `+1` assignment in this phase.** The read-only inspection
+confirmed the pre-existing `CALL_RECORDINGS` bucket, prefix and KMS key used by
+the qualification defaults. StockGuard reuses that association and never
+creates, imports or replaces recording storage.
 
 ## 4. GitHub environment
 
