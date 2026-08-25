@@ -119,7 +119,7 @@ resource "aws_connect_contact_flow" "supplier_simulator" {
         Type       = "ConnectParticipantWithLexBot"
         Parameters = {
           LexV2Bot = { AliasArn = local.lex_bot_alias_arn }
-          Text     = "Sorry, I didn't catch that. Could you repeat what you're calling about?"
+          Text     = "Sorry, I didn't catch that. Could you repeat your last question?"
         }
         Transitions = {
           NextAction = "disconnect"

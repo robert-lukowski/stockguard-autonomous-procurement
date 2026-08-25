@@ -14,6 +14,7 @@
     "build:lambda": "esbuild infrastructure/terraform/lambda/supplierSimulatorHandler.ts --bundle --platform=node --target=node22 --format=cjs --outfile=infrastructure/terraform/build/supplierSimulator/index.js && esbuild infrastructure/terraform/lambda/liveCallerHandler.ts --bundle --platform=node --target=node22 --format=cjs --external:@aws-sdk/client-secrets-manager --outfile=infrastructure/terraform/build/liveCaller/index.js"
   },
   "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.1117.0",
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^4.3.4",
     "lucide-react": "^0.468.0",
