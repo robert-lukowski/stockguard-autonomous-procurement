@@ -15,7 +15,7 @@ on:
         default: true
         type: boolean
       enable_call_recording:
-        description: 'Include private automated-interaction recording in the reviewed plan'
+        description: 'Include existing Connect automated-interaction recording in the reviewed plan'
         required: false
         default: false
         type: boolean

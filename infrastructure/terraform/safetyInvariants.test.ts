@@ -341,17 +341,18 @@ describe("Terraform workflow invariants", () => {
     }
   });
 
-  it("adds one recording input to the apply workflow's saved-plan path", () => {
-    expect(plan).toContain("simulator_enabled:");
-    expect(plan).not.toContain("enable_call_recording:");
-    expect(apply).toContain("simulator_enabled:");
-    expect(apply).toMatch(
-      /enable_call_recording:[\s\S]*?default: false[\s\S]*?TF_VAR_enable_call_recording:/,
-    );
-    expect(apply).toContain("--expect-recording \"$RECORDING\"");
+  it("uses the same recording input in plan and apply", () => {
     for (const workflow of [plan, apply]) {
+      expect(workflow).toContain("simulator_enabled:");
+      expect(workflow).toMatch(
+        /enable_call_recording:[\s\S]*?description: 'Include existing Connect automated-interaction recording in the reviewed plan'[\s\S]*?default: false[\s\S]*?TF_VAR_enable_call_recording: \$\{\{ inputs\.enable_call_recording \}\}/,
+      );
+      expect(workflow).toMatch(
+        /echo "enable_call_recording: \\`\$\{\{ inputs\.enable_call_recording \}\}\\`"/,
+      );
       expect(workflow).not.toContain("recovery_mode:");
     }
+    expect(apply).toContain("--expect-recording \"$RECORDING\"");
   });
 
   it("uses OIDC rather than static AWS keys", () => {
