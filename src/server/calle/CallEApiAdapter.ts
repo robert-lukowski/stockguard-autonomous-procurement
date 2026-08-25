@@ -248,8 +248,8 @@ export class CallEApiAdapter implements SupplierCallingPort {
         : `Use ${request.locale} throughout the conversation.`;
     const openingInstructions = fixedQualification
       ? [
-          `In your first turn after 'Please go ahead.', combine the required disclosure and the first concrete procurement question for ${request.requestedQuantity} units of ${request.sku} in one continuous turn before waiting for the recipient.`,
-          "After hearing the complete greeting, naturally disclose that you are an AI procurement assistant calling on behalf of StockGuard.",
+          `Once the automated supplier's opening greeting has fully finished, begin one continuous first turn that combines the required disclosure and the first concrete procurement question for ${request.requestedQuantity} units of ${request.sku}.`,
+          "In that first turn, naturally disclose that you are an AI procurement assistant calling on behalf of StockGuard.",
           "Explain that this is a non-binding supplier qualification call for availability and commercial information.",
           `Then naturally ask about availability for ${request.requestedQuantity} units of ${request.sku}.`,
           "Do not stop after the disclosure or yield the turn before asking that concrete procurement question.",
@@ -263,7 +263,7 @@ export class CallEApiAdapter implements SupplierCallingPort {
     const task = [
       `Call the approved supplier ${request.supplierName}.`,
       fixedQualification
-        ? "The automated supplier speaks first. Its opening greeting ends with the exact phrase 'Please go ahead.' Do not begin your introduction or qualification question before you hear that phrase. If the recipient is speaking, never talk over them."
+        ? "The automated supplier speaks first with a brief opening greeting. Wait until that opening greeting has fully finished before you speak. Do not require or wait for any specific exact phrase. Do not interrupt or talk over the supplier."
         : "The recipient will speak first. Do not begin speaking immediately when the call connects. Wait until the recipient has completed the full opening greeting and there is a brief pause before starting your introduction. If the recipient is speaking, never talk over them.",
       ...routingInstructions,
       languageInstruction,

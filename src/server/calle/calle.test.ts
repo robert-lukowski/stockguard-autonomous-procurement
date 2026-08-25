@@ -320,20 +320,21 @@ describe("CallEApiAdapter", () => {
       "The automated supplier speaks first",
     );
     expect(body.task).toContain(
-      "opening greeting ends with the exact phrase 'Please go ahead.'",
+      "Wait until that opening greeting has fully finished before you speak",
     );
     expect(body.task).toContain(
-      "Do not begin your introduction or qualification question before you hear that phrase",
+      "Do not require or wait for any specific exact phrase",
     );
     expect(body.task).toContain(
-      "If the recipient is speaking, never talk over them",
+      "Do not interrupt or talk over the supplier",
     );
+    expect(body.task).not.toContain("exact phrase 'Please go ahead.'");
     expect(body.task).toContain("already pinned to the English qualification profile");
     expect(body.task).toContain(
       "naturally ask about availability for 8 units of CF-220",
     );
     expect(body.task).toContain(
-      "combine the required disclosure and the first concrete procurement question for 8 units of CF-220 in one continuous turn",
+      "Once the automated supplier's opening greeting has fully finished, begin one continuous first turn that combines the required disclosure and the first concrete procurement question for 8 units of CF-220",
     );
     expect(body.task).toContain(
       "Do not stop after the disclosure or yield the turn before asking that concrete procurement question",
