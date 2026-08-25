@@ -82,26 +82,33 @@ variable "enable_call_recording" {
   type        = bool
   default     = false
   description = <<-EOT
-    Create the private recording bucket and attach it to Connect.
-
-    Defaults to FALSE for the first deployment. Attaching a CALL_RECORDINGS
-    storage configuration would replace whatever the Connect instance already
-    has, and that has not yet been inspected. Recording is genuinely useful for
-    debugging the first call, but it is optional and must never disturb an
-    existing configuration or block the core runtime.
-
-    Turn it on only once the instance is confirmed to have no existing
-    CALL_RECORDINGS storage configuration.
+    Use the pre-existing Amazon Connect CALL_RECORDINGS storage configuration
+    for the controlled qualification demo. When true, the contact flow enables
+    automated-interaction recording and the live caller exposes read-only
+    recording lookup. Terraform never creates or owns the bucket or storage
+    association.
 
     It is never a decision source: authority stays with the CALL-E structured
     result, the transcript evidence and the deterministic Policy Gateway.
   EOT
 }
 
-variable "recording_retention_days" {
-  type        = number
-  default     = 30
-  description = "Lifecycle expiry for call recordings."
+variable "recording_bucket_name" {
+  type        = string
+  default     = "amazon-connect-93f5db840470"
+  description = "Pre-existing Amazon Connect CALL_RECORDINGS S3 bucket. Terraform does not own it."
+}
+
+variable "recording_prefix" {
+  type        = string
+  default     = "connect/robert-support/CallRecordings"
+  description = "Pre-existing Amazon Connect CALL_RECORDINGS object prefix."
+}
+
+variable "recording_kms_key_arn" {
+  type        = string
+  default     = "arn:aws:kms:eu-central-1:854010287302:key/00a17f01-a252-43f7-a803-d3e5df363c9b"
+  description = "Customer-managed KMS key used by the pre-existing Connect recording storage."
 }
 
 variable "log_retention_days" {

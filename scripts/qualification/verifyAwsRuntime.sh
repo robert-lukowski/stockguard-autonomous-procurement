@@ -95,9 +95,14 @@ FUNCTION_NAME="$(tf_output supplier_simulator_function_name)"
 BOT_ID="$(tf_output lex_bot_id)"
 ALIAS_ID="$(tf_output lex_bot_alias_id)"
 FLOW_ID="$(tf_output contact_flow_id)"
+RECORDING_BUCKET="$(tf_output recording_bucket_name)"
+RECORDING_PREFIX="$(tf_output recording_prefix)"
+RECORDING_KMS_KEY="$(tf_output recording_kms_key_arn)"
 
 for pair in "supplier_simulator_function_name:$FUNCTION_NAME" "lex_bot_id:$BOT_ID" \
-            "lex_bot_alias_id:$ALIAS_ID" "contact_flow_id:$FLOW_ID"; do
+            "lex_bot_alias_id:$ALIAS_ID" "contact_flow_id:$FLOW_ID" \
+            "recording_bucket_name:$RECORDING_BUCKET" "recording_prefix:$RECORDING_PREFIX" \
+            "recording_kms_key_arn:$RECORDING_KMS_KEY"; do
   [ -n "${pair#*:}" ] || { echo "terraform output ${pair%%:*} is empty; apply did not complete" >&2; exit 2; }
 done
 
@@ -241,25 +246,48 @@ fi
 #
 # Terraform does not assign the number - `aws_connect_contact_flow` carries no
 # number association and this configuration has no phone-number resource, which
-# the plan safety gate independently enforces. But that is an argument from the
-# configuration, not an observation of the live instance, so it is not a PASS
-# either.
+# the source-level safety invariants independently enforce. But that is an
+# argument from the configuration, not an observation of the live instance, so
+# it is not a PASS either.
 manual "phone number -> contact flow association cannot be read via any AWS API (describe-phone-number returns the instance ARN, not the flow); confirm in the Amazon Connect console - see docs/aws-qualification-post-apply-runbook.md step 3"
 
-# Recording must be absent unless it was deliberately requested.
+# The CALL_RECORDINGS association and bucket are pre-existing infrastructure;
+# Terraform never creates or owns either. When recording is enabled, verify
+# only that the external runtime assumption still matches the configured
+# bucket, prefix and KMS key.
 STORAGE="$(aws connect list-instance-storage-configs --region "$REGION" \
   --instance-id "$INSTANCE_ID" --resource-type CALL_RECORDINGS \
-  --query "StorageConfigs[].S3Config.BucketName" --output text 2>/dev/null || true)"
+  --output json 2>/dev/null || true)"
+STORAGE_STATUS="$(printf '%s' "$STORAGE" | python3 -c '
+import json,sys
+try:
+    configs = json.load(sys.stdin).get("StorageConfigs", [])
+except (json.JSONDecodeError, AttributeError):
+    configs = []
+expected_bucket, expected_prefix, expected_key = sys.argv[1:]
+if not configs:
+    print("NONE")
+elif any(
+    config.get("S3Config", {}).get("BucketName") == expected_bucket
+    and config.get("S3Config", {}).get("BucketPrefix") == expected_prefix
+    and config.get("S3Config", {}).get("EncryptionConfig", {}).get("KeyId") == expected_key
+    for config in configs
+):
+    print("MATCH")
+else:
+    print("OTHER")
+' "$RECORDING_BUCKET" "$RECORDING_PREFIX" "$RECORDING_KMS_KEY")"
 if [ "$EXPECT_RECORDING" = "false" ]; then
-  case "$STORAGE" in
-    *stockguard*) fail "a StockGuard recording bucket is attached although recording was not requested" ;;
-    "") pass "no CALL_RECORDINGS configuration on the instance" ;;
-    *) pass "CALL_RECORDINGS config exists but is not StockGuard's; this apply did not create it" ;;
+  case "$STORAGE_STATUS" in
+    MATCH) pass "pre-existing CALL_RECORDINGS storage matches; StockGuard recording is disabled" ;;
+    NONE) pass "StockGuard recording is disabled; no storage lookup is required" ;;
+    *) info "StockGuard recording is disabled; the external CALL_RECORDINGS config is not used" ;;
   esac
 else
-  case "$STORAGE" in
-    *stockguard*) pass "StockGuard recording bucket is attached as requested" ;;
-    *) fail "recording was requested but no StockGuard bucket is attached" ;;
+  case "$STORAGE_STATUS" in
+    MATCH) pass "pre-existing CALL_RECORDINGS bucket, prefix and KMS key match" ;;
+    NONE) fail "recording was requested but no pre-existing CALL_RECORDINGS config exists" ;;
+    *) fail "recording was requested but the pre-existing CALL_RECORDINGS config does not match" ;;
   esac
 fi
 

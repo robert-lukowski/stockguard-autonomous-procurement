@@ -88,7 +88,7 @@ resource "aws_connect_contact_flow" "supplier_simulator" {
         Type       = "UpdateContactRecordingBehavior"
         Parameters = {
           RecordingBehavior = {
-            IVRRecordingBehavior = "Enabled"
+            IVRRecordingBehavior = var.enable_call_recording ? "Enabled" : "Disabled"
           }
         }
         # The flow-language action has no result conditions or error branches.

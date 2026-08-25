@@ -28,6 +28,21 @@ output "simulator_enabled" {
   description = "False means the supplier will refuse every turn, whatever else is deployed."
 }
 
+output "recording_bucket_name" {
+  value       = var.recording_bucket_name
+  description = "Pre-existing Amazon Connect recording bucket used by the optional demo player."
+}
+
+output "recording_prefix" {
+  value       = var.recording_prefix
+  description = "Pre-existing Amazon Connect CALL_RECORDINGS prefix used by the optional demo player."
+}
+
+output "recording_kms_key_arn" {
+  value       = var.recording_kms_key_arn
+  description = "Pre-existing KMS key protecting Amazon Connect recordings."
+}
+
 output "manual_connect_association_command" {
   description = <<-EOT
     Terraform gap: aws_connect_bot_association is Lex V1 only

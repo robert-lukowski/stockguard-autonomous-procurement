@@ -68,6 +68,9 @@ describe("post-apply verification is read-only", () => {
       "lex_bot_id",
       "lex_bot_alias_id",
       "contact_flow_id",
+      "recording_bucket_name",
+      "recording_prefix",
+      "recording_kms_key_arn",
     ]) {
       expect(script).toContain(`tf_output ${output}`);
     }
@@ -88,7 +91,7 @@ describe("post-apply verification is read-only", () => {
       "get-policy", // Lex may invoke the function
       "lexv2.amazonaws.com",
       "describe-contact-flow", // StockGuard flow exists
-      "CALL_RECORDINGS", // no recording config when not requested
+      "CALL_RECORDINGS", // pre-existing recording config matches when requested
     ]) {
       expect(script).toContain(probe);
     }
@@ -105,6 +108,13 @@ describe("post-apply verification is read-only", () => {
     expect(executable).not.toContain("TargetArn");
     expect(executable).not.toMatch(/pass ".*bound to the StockGuard flow/);
     expect(executable).not.toMatch(/pass ".*phone/i);
+  });
+
+  it("verifies only the pre-existing recording association and never accesses S3", () => {
+    expect(executable).toContain("pre-existing CALL_RECORDINGS bucket, prefix and KMS key match");
+    expect(executable).toContain('if [ "$EXPECT_RECORDING" = "false" ]');
+    expect(executable).not.toContain("StockGuard recording bucket is attached");
+    expect(invocations.filter((i) => i.service === "s3")).toEqual([]);
   });
 
   it("reports the phone-number association as needing a human instead", () => {

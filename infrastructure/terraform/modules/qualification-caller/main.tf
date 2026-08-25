@@ -34,6 +34,10 @@ variable "recording_prefix" {
   type = string
 }
 
+variable "recording_kms_key_arn" {
+  type = string
+}
+
 variable "recording_url_ttl_seconds" {
   type = number
 }
@@ -114,7 +118,6 @@ resource "aws_iam_role_policy" "recordings" {
         Condition = {
           StringLike = {
             "s3:prefix" = [
-              var.recording_prefix,
               "${var.recording_prefix}/*",
             ]
           }
@@ -125,6 +128,12 @@ resource "aws_iam_role_policy" "recordings" {
         Effect   = "Allow"
         Action   = ["s3:GetObject"]
         Resource = "${var.recording_bucket_arn}/${var.recording_prefix}/*"
+      },
+      {
+        Sid      = "DecryptSelectedCallRecording"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = var.recording_kms_key_arn
       }
     ]
   })

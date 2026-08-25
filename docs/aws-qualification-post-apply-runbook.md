@@ -25,9 +25,10 @@ terraform output          # visually confirm every output resolved
 ```
 
 Expect `lex_bot_id`, `lex_bot_alias_id`, `lex_bot_alias_arn`, `contact_flow_id`,
-`supplier_simulator_function_name` and `simulator_enabled`. An empty output
-means the apply did not complete; stop and re-read the apply log rather than
-continuing by hand.
+`supplier_simulator_function_name`, `simulator_enabled`,
+`recording_bucket_name`, `recording_prefix` and `recording_kms_key_arn`. An
+empty output means the apply did not complete; stop and re-read the apply log
+rather than continuing by hand.
 
 `simulator_enabled` must read `false` at this point.
 
@@ -55,8 +56,10 @@ script and rejecting any mutating verb.
 It confirms: the Lambda exists on `nodejs22.x` with `SIMULATOR_ENABLED=false`,
 a bounded reserved concurrency and a resource policy naming `lexv2.amazonaws.com`;
 the Lex bot, its built `en_US` locale and a `qualification` alias pointing at a
-**numbered** version rather than `DRAFT`; the StockGuard contact flow; and that
-no StockGuard recording configuration was attached.
+**numbered** version rather than `DRAFT`; the StockGuard contact flow; and, when
+recording is enabled, that the pre-existing Connect bucket, prefix and KMS key
+still match the configured runtime assumptions. Terraform does not own or
+replace that association.
 
 It reports one item as `MANUAL` rather than checking it: **whether any phone
 number is routed to the StockGuard flow**. No AWS API exposes that association
@@ -168,19 +171,12 @@ Actions → Terraform Apply → Run workflow on `main`:
 |---|---|
 | `confirm` | `APPLY` |
 | `simulator_enabled` | `true` |
-| `enable_call_recording` | `false` |
+| `enable_call_recording` | `true` |
 
-This selects the **qualification** plan policy automatically. That policy
-accepts exactly one change — an `update` to
-`aws_lambda_function.supplier_simulator` that flips `SIMULATOR_ENABLED` from
-`"false"` to `"true"` — and rejects any create, delete, replacement, any update
-to any other resource, and any change to the function's role, runtime, timeout,
-memory, reserved concurrency or other environment variables. Nothing else can
-ride along with the arming.
-
-The direction is checked, not just the destination: a plan whose prior state is
-not `"false"` is refused, so this mode cannot be used to disarm. Step 9.2 is the
-mirror image and is the only path that can.
+The workflow creates a saved plan that arms the simulator and enables the
+recording action plus read-only lookup against the pre-existing Connect
+storage. Review that plan before approval. It must not create an S3 bucket or
+a `CALL_RECORDINGS` storage association.
 
 **8b. Verify the Lambda is armed.**
 
@@ -188,7 +184,7 @@ mirror image and is the only path that can.
 scripts/qualification/verifyAwsRuntime.sh \
   --outputs /tmp/sg-outputs.json \
   --instance-id "$AWS_CONNECT_INSTANCE_ID" \
-  --expect-simulator true --expect-recording false
+  --expect-simulator true --expect-recording true
 ```
 
 **8c. Assign the existing +1 number to the StockGuard flow.**
@@ -223,15 +219,10 @@ step 9 runs after a successful qualification too.
 1. **Restore the +1 contact flow.** Connect console → the number → select the
    flow you recorded in step 3. Save. Verify by reopening the number.
 2. **Disarm the simulator.** Terraform Apply with `confirm=APPLY`,
-   `simulator_enabled=false`, `enable_call_recording=false`. This runs under
-   the **initial** policy, which permits exactly one update — to
-   `aws_lambda_function.supplier_simulator`, changing `SIMULATOR_ENABLED` from
-   `"true"` to `"false"` and nothing else. Every other managed resource must be
-   create, read or no-op, and the function's role, runtime, handler, timeout,
-   memory, reserved concurrency and every other environment variable must be
-   unchanged — the same protections that apply to arming. If state has drifted
-   so that disarming would destroy, replace or update anything else, the gate
-   stops the apply and you disarm by hand instead.
+   `simulator_enabled=false`, `enable_call_recording=false`. Review the saved
+   plan: it should disarm the simulator, disable IVR recording for this flow and
+   remove the caller's optional recording lookup IAM. It must not modify the
+   external bucket or Connect storage association.
 3. **Remove the Lex association only if you need to.** It is inert once the
    number no longer routes to the StockGuard flow, so prefer leaving it:
    ```bash
@@ -247,19 +238,13 @@ step 9 runs after a successful qualification too.
 
 ---
 
-## Recording stays off
+## Recording reuses the existing Connect storage
 
-`enable_call_recording` remains `false`, and both workflows refuse to plan or
-apply with it set to `true` — the mode selector fails closed before an AWS
-credential is even requested.
-
-The reason is narrow and fixable: attaching a `CALL_RECORDINGS` storage
-configuration **replaces** whatever the Connect instance already has, and that
-baseline has not been captured. Recording is genuinely useful for debugging a
-first live call, so this is worth revisiting — but only after
-`aws connect list-instance-storage-configs --resource-type CALL_RECORDINGS`
-proves the instance has no existing configuration, and only as a deliberate
-change to the policy that currently rejects it.
+The read-only inspection confirmed an existing `CALL_RECORDINGS` association.
+StockGuard never creates, imports or replaces it. `enable_call_recording=true`
+only enables IVR recording in this contact flow, grants the live caller scoped
+read access to the existing bucket/prefix/KMS key, and enables the optional
+Pages lookup/player.
 
 Recording is never a decision source. Authority stays with the CALL-E
 structured result, the transcript evidence and the deterministic Policy
@@ -269,6 +254,7 @@ Gateway.
 
 ## What this runbook deliberately does not contain
 
-No account id, no phone number, no bot id, no flow id, no ARN. Every
-identifier is read at run time from Terraform outputs or from GitHub
-configuration. Fill them into your own notes, not into this file.
+No phone number, bot id or flow id is committed. The pre-existing recording
+bucket, prefix and KMS key ARN are explicit non-secret qualification defaults;
+runtime-generated identifiers still come from Terraform outputs or GitHub
+configuration.
