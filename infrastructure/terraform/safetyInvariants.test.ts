@@ -146,7 +146,7 @@ describe("infrastructure invariants", () => {
     );
     expect(primary).toContain('Text = "Please go ahead."');
     expect(connect).toContain(
-      "Sorry, I didn't catch that. Could you repeat your last question?",
+      "Sorry, I didn't catch that clearly. Please go ahead.",
     );
     expect(primary).toContain('NextAction = "disconnect"');
     expect(primary).toContain(
@@ -155,9 +155,16 @@ describe("infrastructure invariants", () => {
     expect(primary).toContain(
       '{ ErrorType = "NoMatchingError", NextAction = "lex-retry" },',
     );
-    expect(primary.match(/NextAction = "lex-retry"/g)).toHaveLength(1);
+    // Only the bot's own FallbackIntent gets the bounded retry; any other
+    // Lex result (a real intent, or EndConversation) falls through the
+    // default NextAction straight to disconnect, so a successful goodbye can
+    // never be retried.
+    expect(primary).toContain('Operator = "Equals"');
+    expect(primary).toContain('Operands = ["FallbackIntent"]');
+    expect(primary.match(/NextAction = "lex-retry"/g)).toHaveLength(2);
     expect(retry.match(/NextAction = "disconnect"/g)).toHaveLength(3);
     expect(retry).not.toMatch(/NextAction = "lex-(?:primary|retry)"/);
+    expect(retry).not.toMatch(/Conditions\s*=\s*\[/);
   });
 
   it("requires an actual procurement request instead of classifying disclosure alone", () => {

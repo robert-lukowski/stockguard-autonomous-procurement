@@ -122,11 +122,26 @@ resource "aws_connect_contact_flow" "supplier_simulator" {
           Text = "Please go ahead."
         }
         Transitions = {
+          # Default: any Lex result other than the bot's own FallbackIntent
+          # (a real intent match, or a completed/EndConversation turn) falls
+          # through here and disconnects. This is what protects a successful
+          # goodbye from ever being retried.
           NextAction = "disconnect"
-          # There are deliberately no intent Conditions. Successful Lex close
-          # follows NextAction; an unmatched result must also terminate rather
-          # than replaying the prompt after EndConversation. Only a genuine
-          # unmatched error gets the single bounded retry.
+          # The bot's built-in fallback intent is literally named
+          # "FallbackIntent" (confirmed via `aws lexv2-models list-intents`
+          # against the live bot; its parentIntentSignature is
+          # AMAZON.FallbackIntent, but Connect conditions match the intent's
+          # own name, not the built-in signature). Only this one case gets
+          # the bounded retry.
+          Conditions = [
+            {
+              NextAction = "lex-retry"
+              Condition = {
+                Operator = "Equals"
+                Operands = ["FallbackIntent"]
+              }
+            },
+          ]
           Errors = [
             { ErrorType = "NoMatchingCondition", NextAction = "disconnect" },
             { ErrorType = "NoMatchingError", NextAction = "lex-retry" },
@@ -138,9 +153,14 @@ resource "aws_connect_contact_flow" "supplier_simulator" {
         Type       = "ConnectParticipantWithLexBot"
         Parameters = {
           LexV2Bot = { AliasArn = local.lex_bot_alias_arn }
-          Text     = "Sorry, I didn't catch that. Could you repeat your last question?"
+          # Deliberately does not presume a question was already asked: the
+          # FallbackIntent that lands here may fire before the caller has
+          # completed their first procurement question.
+          Text = "Sorry, I didn't catch that clearly. Please go ahead."
         }
         Transitions = {
+          # No intent branching here: a second FallbackIntent has nowhere to
+          # go but this same default disconnect, so there is no retry loop.
           NextAction = "disconnect"
           Errors = [
             { ErrorType = "NoMatchingCondition", NextAction = "disconnect" },
