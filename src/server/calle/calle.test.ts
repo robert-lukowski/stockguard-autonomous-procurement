@@ -333,6 +333,15 @@ describe("CallEApiAdapter", () => {
       "naturally ask about availability for 8 units of CF-220",
     );
     expect(body.task).toContain(
+      "combine the required disclosure and the first concrete procurement question for 8 units of CF-220 in one continuous turn",
+    );
+    expect(body.task).toContain(
+      "Do not stop after the disclosure or yield the turn before asking that concrete procurement question",
+    );
+    expect(body.task).toContain(
+      "Do not say filler acknowledgements such as 'I'm here' after the disclosure",
+    );
+    expect(body.task).toContain(
       "Refer to the requested product code naturally as 'CF-220'",
     );
     expect(body.task).toContain(

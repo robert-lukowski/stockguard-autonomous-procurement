@@ -48,10 +48,32 @@ resource "aws_iam_role_policy" "supplier_simulator_logs" {
 
 data "aws_iam_policy_document" "supplier_simulator_bedrock" {
   statement {
-    sid       = "RealizeDeterministicSupplierResponse"
-    effect    = "Allow"
-    actions   = ["bedrock:InvokeModel"]
-    resources = ["arn:aws:bedrock:eu-central-1::foundation-model/amazon.nova-micro-v1:0"]
+    sid     = "InvokeEuGeoInferenceProfile"
+    effect  = "Allow"
+    actions = ["bedrock:InvokeModel"]
+    resources = [
+      "arn:aws:bedrock:eu-central-1:${var.aws_account_id}:inference-profile/eu.amazon.nova-micro-v1:0",
+    ]
+  }
+
+  statement {
+    sid     = "InvokeNovaMicroThroughEuGeoProfile"
+    effect  = "Allow"
+    actions = ["bedrock:InvokeModel"]
+    resources = [
+      "arn:aws:bedrock:eu-central-1::foundation-model/amazon.nova-micro-v1:0",
+      "arn:aws:bedrock:eu-north-1::foundation-model/amazon.nova-micro-v1:0",
+      "arn:aws:bedrock:eu-west-1::foundation-model/amazon.nova-micro-v1:0",
+      "arn:aws:bedrock:eu-west-3::foundation-model/amazon.nova-micro-v1:0",
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "bedrock:InferenceProfileArn"
+      values = [
+        "arn:aws:bedrock:eu-central-1:${var.aws_account_id}:inference-profile/eu.amazon.nova-micro-v1:0",
+      ]
+    }
   }
 }
 

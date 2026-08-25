@@ -96,11 +96,17 @@ export class BedrockSupplierResponseRealizer
         .filter((text): text is string => typeof text === "string")
         .join(" ")
         .trim();
-      if (message.length === 0) throw new Error("BEDROCK_EMPTY_RESPONSE");
+      if (message.length === 0) {
+        const emptyResponse = new Error("BEDROCK_EMPTY_RESPONSE");
+        emptyResponse.name = "BedrockEmptyResponseError";
+        throw emptyResponse;
+      }
       return message;
     } catch (error) {
       if (controller.signal.aborted) {
-        throw new Error("BEDROCK_TIMEOUT", { cause: error });
+        const timeoutError = new Error("BEDROCK_TIMEOUT", { cause: error });
+        timeoutError.name = "BedrockTimeoutError";
+        throw timeoutError;
       }
       throw error;
     } finally {

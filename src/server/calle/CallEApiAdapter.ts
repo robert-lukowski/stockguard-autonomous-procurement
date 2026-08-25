@@ -248,9 +248,12 @@ export class CallEApiAdapter implements SupplierCallingPort {
         : `Use ${request.locale} throughout the conversation.`;
     const openingInstructions = fixedQualification
       ? [
+          `In your first turn after 'Please go ahead.', combine the required disclosure and the first concrete procurement question for ${request.requestedQuantity} units of ${request.sku} in one continuous turn before waiting for the recipient.`,
           "After hearing the complete greeting, naturally disclose that you are an AI procurement assistant calling on behalf of StockGuard.",
           "Explain that this is a non-binding supplier qualification call for availability and commercial information.",
           `Then naturally ask about availability for ${request.requestedQuantity} units of ${request.sku}.`,
+          "Do not stop after the disclosure or yield the turn before asking that concrete procurement question.",
+          "Do not say filler acknowledgements such as 'I'm here' after the disclosure.",
         ]
       : [
           "After the greeting, disclose that you are an AI procurement assistant calling on behalf of StockGuard for a supplier qualification demo.",
