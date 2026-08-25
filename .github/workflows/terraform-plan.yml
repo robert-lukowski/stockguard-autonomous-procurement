@@ -14,6 +14,11 @@ on:
         required: false
         default: true
         type: boolean
+      enable_call_recording:
+        description: 'Include existing Connect automated-interaction recording in the reviewed plan'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -189,6 +194,7 @@ jobs:
           TF_VAR_connect_instance_id: ${{ secrets.AWS_CONNECT_INSTANCE_ID }}
           TF_VAR_aws_region: ${{ vars.AWS_REGION }}
           TF_VAR_simulator_enabled: ${{ inputs.simulator_enabled }}
+          TF_VAR_enable_call_recording: ${{ inputs.enable_call_recording }}
         run: |
           set -euo pipefail
           terraform plan -no-color -out=tfplan | tee plan.txt
@@ -201,6 +207,7 @@ jobs:
             echo '### Terraform plan'
             echo ''
             echo "simulator_enabled: \`${{ inputs.simulator_enabled }}\`"
+            echo "enable_call_recording: \`${{ inputs.enable_call_recording }}\`"
             echo ''
             echo '```'
             grep -E '^(Plan:|No changes)' infrastructure/terraform/plan.txt || echo 'see job log'
