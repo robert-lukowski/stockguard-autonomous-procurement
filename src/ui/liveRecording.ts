@@ -1,5 +1,5 @@
 export const RECORDING_POLL_INTERVAL_MS = 3_000;
-export const RECORDING_POLL_LIMIT = 20;
+export const RECORDING_POLL_LIMIT = 100;
 
 export type RecordingLookupReference = {
   workflowId: string;
