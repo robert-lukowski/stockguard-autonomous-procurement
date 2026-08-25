@@ -148,22 +148,46 @@ describe("infrastructure invariants", () => {
     expect(connect).toContain(
       "Sorry, I didn't catch that. Could you repeat your last question?",
     );
-    expect(primary.match(/NextAction = "lex-retry"/g)).toHaveLength(2);
     expect(primary).toContain('NextAction = "disconnect"');
+    expect(primary).toContain(
+      '{ ErrorType = "NoMatchingCondition", NextAction = "disconnect" },',
+    );
+    expect(primary).toContain(
+      '{ ErrorType = "NoMatchingError", NextAction = "lex-retry" },',
+    );
+    expect(primary.match(/NextAction = "lex-retry"/g)).toHaveLength(1);
     expect(retry.match(/NextAction = "disconnect"/g)).toHaveLength(3);
     expect(retry).not.toMatch(/NextAction = "lex-(?:primary|retry)"/);
   });
 
-  it("recognizes natural StockGuard qualification openings", () => {
+  it("requires an actual procurement request instead of classifying disclosure alone", () => {
     const lex = tf("lex.tf");
+    const quoteStart = lex.indexOf('resource "aws_lexv2models_intent" "get_supplier_quote"');
+    const validityStart = lex.indexOf(
+      'resource "aws_lexv2models_intent" "confirm_offer_validity"',
+    );
+    const quote = lex.slice(quoteStart, validityStart);
+
+    expect(quoteStart).toBeGreaterThan(-1);
+    expect(validityStart).toBeGreaterThan(quoteStart);
+    expect(quote).toContain("An AI or StockGuard disclosure by itself is not a quote request");
     for (const utterance of [
-      "I'm an AI procurement assistant calling on behalf of StockGuard",
-      "I'm calling on behalf of StockGuard for a supplier qualification",
+      "Do you have this part in stock",
+      "What is the unit price",
+      "When could you deliver",
+      "I'm calling to check availability for this item",
       "I need to confirm availability and pricing",
       "Can you confirm stock unit price and delivery",
+      "I'm checking availability for eight units",
+    ]) {
+      expect(quote).toContain(utterance);
+    }
+    for (const disclosureOnly of [
+      "I'm an AI procurement assistant calling on behalf of StockGuard",
+      "I'm calling on behalf of StockGuard for a supplier qualification",
       "This call requests supplier availability and commercial information",
     ]) {
-      expect(lex).toContain(utterance);
+      expect(quote).not.toContain(disclosureOnly);
     }
   });
 
@@ -180,16 +204,38 @@ describe("infrastructure invariants", () => {
   it("scopes supplier response realization to Nova Micro with a short fallback timeout", () => {
     const iam = tf("iam.tf");
     const lambda = tf("lambda.tf");
-    const pkg = JSON.parse(repoFile("package.json"));
-
-    expect(iam).toContain('actions   = ["bedrock:InvokeModel"]');
-    expect(iam).toContain(
-      'resources = ["arn:aws:bedrock:eu-central-1::foundation-model/amazon.nova-micro-v1:0"]',
+    const handler = repoFile(
+      "infrastructure",
+      "terraform",
+      "lambda",
+      "supplierSimulatorHandler.ts",
     );
+    const pkg = JSON.parse(repoFile("package.json"));
+    const profileArn =
+      "arn:aws:bedrock:eu-central-1:${var.aws_account_id}:inference-profile/eu.amazon.nova-micro-v1:0";
+    const destinationModelArns = [
+      "arn:aws:bedrock:eu-central-1::foundation-model/amazon.nova-micro-v1:0",
+      "arn:aws:bedrock:eu-north-1::foundation-model/amazon.nova-micro-v1:0",
+      "arn:aws:bedrock:eu-west-1::foundation-model/amazon.nova-micro-v1:0",
+      "arn:aws:bedrock:eu-west-3::foundation-model/amazon.nova-micro-v1:0",
+    ];
+
+    expect(iam.match(/actions\s*=\s*\["bedrock:InvokeModel"\]/g)).toHaveLength(2);
+    expect(iam).toContain(profileArn);
+    for (const arn of destinationModelArns) expect(iam).toContain(arn);
+    expect(iam).toContain('variable = "bedrock:InferenceProfileArn"');
+    expect(iam.match(new RegExp(profileArn.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))).toHaveLength(2);
+    expect(iam).not.toMatch(/actions\s*=\s*\["bedrock:\*"\]/);
+    expect(iam).not.toMatch(/resources\s*=\s*\[\s*"\*"/);
     expect(lambda).toMatch(
+      /BEDROCK_SUPPLIER_MODEL_ID\s*=\s*"eu\.amazon\.nova-micro-v1:0"/,
+    );
+    expect(lambda).not.toMatch(
       /BEDROCK_SUPPLIER_MODEL_ID\s*=\s*"amazon\.nova-micro-v1:0"/,
     );
+    expect(lambda).not.toContain("global.amazon.nova-micro-v1:0");
     expect(lambda).toMatch(/BEDROCK_SUPPLIER_TIMEOUT_MS\s*=\s*"3000"/);
+    expect(handler).toContain('region: "eu-central-1"');
     expect(pkg.dependencies["@aws-sdk/client-bedrock-runtime"]).toBeDefined();
     expect(pkg.scripts["build:lambda"]).not.toContain(
       "external:@aws-sdk/client-bedrock-runtime",

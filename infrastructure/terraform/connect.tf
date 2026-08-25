@@ -123,9 +123,12 @@ resource "aws_connect_contact_flow" "supplier_simulator" {
         }
         Transitions = {
           NextAction = "disconnect"
-          # NoMatchingError must always be defined on an action that can error.
+          # There are deliberately no intent Conditions. Successful Lex close
+          # follows NextAction; an unmatched result must also terminate rather
+          # than replaying the prompt after EndConversation. Only a genuine
+          # unmatched error gets the single bounded retry.
           Errors = [
-            { ErrorType = "NoMatchingCondition", NextAction = "lex-retry" },
+            { ErrorType = "NoMatchingCondition", NextAction = "disconnect" },
             { ErrorType = "NoMatchingError", NextAction = "lex-retry" },
           ]
         }

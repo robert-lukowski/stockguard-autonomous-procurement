@@ -62,7 +62,7 @@ describe("BedrockSupplierResponseRealizer", () => {
   it("uses one Converse request with authoritative facts and caller context", async () => {
     const send = vi.fn().mockResolvedValue(response());
     const realizer = new BedrockSupplierResponseRealizer({
-      modelId: "amazon.nova-micro-v1:0",
+      modelId: "eu.amazon.nova-micro-v1:0",
       timeoutMs: 3_000,
       client: { send } as BedrockConverseClient,
     });
@@ -74,7 +74,7 @@ describe("BedrockSupplierResponseRealizer", () => {
     expect(send).toHaveBeenCalledTimes(1);
     const [command, options] = send.mock.calls[0];
     expect(command.input).toMatchObject({
-      modelId: "amazon.nova-micro-v1:0",
+      modelId: "eu.amazon.nova-micro-v1:0",
       inferenceConfig: { temperature: 0.2, maxTokens: 100 },
     });
     const systemPrompt = command.input.system?.[0]?.text ?? "";
@@ -111,7 +111,7 @@ describe("BedrockSupplierResponseRealizer", () => {
       );
     }));
     const realizer = new BedrockSupplierResponseRealizer({
-      modelId: "amazon.nova-micro-v1:0",
+      modelId: "eu.amazon.nova-micro-v1:0",
       timeoutMs: 5,
       client: { send } as BedrockConverseClient,
     });
@@ -143,7 +143,7 @@ describe("BedrockSupplierResponseRealizer", () => {
       profileId: "EN_SUPPLIER",
     });
     const realizer = new BedrockSupplierResponseRealizer({
-      modelId: "amazon.nova-micro-v1:0",
+      modelId: "eu.amazon.nova-micro-v1:0",
       timeoutMs: 3_000,
       client: { send } as BedrockConverseClient,
     });
@@ -174,6 +174,45 @@ describe("BedrockSupplierResponseRealizer", () => {
     expect(logged).not.toContain(generated);
     expect(logged).not.toContain("Secret transcript text");
     expect(logged).not.toContain("CF-220");
+    log.mockRestore();
+  });
+
+  it("classifies ValidationException and logs only safe failure metadata", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const deterministic = await service().respond({
+      intent: "GetSupplierQuote",
+      rfqId: rfq.rfqId,
+      profileId: "EN_SUPPLIER",
+    });
+    const sensitiveErrorMessage =
+      "Secret error message containing prompt, transcript and generated text";
+    const validationError = Object.assign(new Error(sensitiveErrorMessage), {
+      name: "ValidationException",
+      $metadata: { httpStatusCode: 400 },
+    });
+
+    await expect(realizeSupplierResponse(
+      { realize: vi.fn().mockRejectedValue(validationError) },
+      deterministic,
+      "Secret transcript text",
+    )).resolves.toBe(deterministic.message);
+
+    const logged = log.mock.calls.flat().join(" ");
+    const event = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(event).toMatchObject({
+      event: "supplier_response_realization",
+      intent: "GetSupplierQuote",
+      mode: "deterministic-fallback",
+      failureCategory: "validation-error",
+      errorName: "ValidationException",
+      httpStatusCode: 400,
+    });
+    expect(event.elapsedMs).toEqual(expect.any(Number));
+    expect(event).not.toHaveProperty("errorMessage");
+    expect(logged).not.toContain(sensitiveErrorMessage);
+    expect(logged).not.toContain("Secret transcript text");
+    expect(logged).not.toContain("CF-220");
+    expect(logged).not.toContain(deterministic.message);
     log.mockRestore();
   });
 });

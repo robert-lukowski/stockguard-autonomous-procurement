@@ -118,22 +118,19 @@ resource "aws_lexv2models_intent" "get_supplier_quote" {
   bot_version = aws_lexv2models_bot_locale.en.bot_version
   locale_id   = aws_lexv2models_bot_locale.en.locale_id
   name        = "GetSupplierQuote"
-  description = "Collect supplier availability, quantity, unit price, currency and earliest delivery for the requested material."
+  description = "Match only when the caller actually requests supplier availability, stock, quantity, price, a quote or delivery. An AI or StockGuard disclosure by itself is not a quote request."
 
-  sample_utterance { utterance = "I am calling about a purchase request" }
+  sample_utterance { utterance = "I am calling to check stock and pricing for a purchase request" }
   sample_utterance { utterance = "Do you have this part in stock" }
   sample_utterance { utterance = "How many units are available" }
   sample_utterance { utterance = "What is the unit price" }
   sample_utterance { utterance = "Can you quote me for this material" }
   sample_utterance { utterance = "I need a quote" }
   sample_utterance { utterance = "When could you deliver" }
-  sample_utterance { utterance = "I'm an AI procurement assistant calling on behalf of StockGuard" }
-  sample_utterance { utterance = "I'm calling on behalf of StockGuard for a supplier qualification" }
   sample_utterance { utterance = "I'm calling to check availability for this item" }
   sample_utterance { utterance = "I need to confirm availability and pricing" }
   sample_utterance { utterance = "Can you confirm stock unit price and delivery" }
   sample_utterance { utterance = "I'm checking availability for eight units" }
-  sample_utterance { utterance = "This call requests supplier availability and commercial information" }
 
   fulfillment_code_hook {
     enabled = true

@@ -43,7 +43,7 @@ resource "aws_lambda_function" "supplier_simulator" {
       QUALIFICATION_SKU           = var.qualification_sku
       QUALIFICATION_QUANTITY      = tostring(var.qualification_quantity)
       QUALIFICATION_REQUIRED_BY   = var.qualification_required_by
-      BEDROCK_SUPPLIER_MODEL_ID   = "amazon.nova-micro-v1:0"
+      BEDROCK_SUPPLIER_MODEL_ID   = "eu.amazon.nova-micro-v1:0"
       BEDROCK_SUPPLIER_TIMEOUT_MS = "3000"
     }
   }
