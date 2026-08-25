@@ -1,6 +1,10 @@
 import { Loader2, Lock, PhoneCall, ShieldCheck } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { RuntimeBadge } from "./RuntimeBadge";
+import {
+  pollForRecording,
+  type LiveRecordingState,
+} from "./liveRecording";
 import {
   liveQualificationResultText,
   type LiveQualificationEnvelope,
@@ -39,6 +43,10 @@ export function LiveQualificationPanel() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [result, setResult] = useState<LiveQualificationEnvelope | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [recording, setRecording] = useState<LiveRecordingState>({ status: "idle" });
+  const recordingPoll = useRef<AbortController | null>(null);
+
+  useEffect(() => () => recordingPoll.current?.abort(), []);
 
   if (!backendUrl) {
     return (
@@ -67,7 +75,9 @@ export function LiveQualificationPanel() {
     if (!canRun) return;
     setError(null);
     setResult(null);
+    setRecording({ status: "idle" });
     setPhase("running");
+    recordingPoll.current?.abort();
 
     const judgePin = pin;
     setPin("");
@@ -99,6 +109,29 @@ export function LiveQualificationPanel() {
       }
       setResult(envelope);
       setPhase("done");
+
+      if (envelope.recordingLookup) {
+        setRecording({ status: "processing" });
+        const controller = new AbortController();
+        recordingPoll.current = controller;
+        void pollForRecording({
+          backendUrl,
+          judgePin,
+          reference: envelope.recordingLookup,
+          signal: controller.signal,
+        })
+          .then((nextRecording) => {
+            if (!controller.signal.aborted) setRecording(nextRecording);
+          })
+          .catch((recordingError: unknown) => {
+            if (
+              !controller.signal.aborted &&
+              (!(recordingError instanceof DOMException) || recordingError.name !== "AbortError")
+            ) {
+              setRecording({ status: "error" });
+            }
+          });
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The live qualification could not complete.");
       setPhase("idle");
@@ -243,6 +276,37 @@ export function LiveQualificationPanel() {
           <p className="mt-4 text-xs leading-relaxed text-ground-400">
             {liveQualificationResultText(result)}
           </p>
+
+          {recording.status !== "idle" && recording.status !== "disabled" && (
+            <div className="mt-4 border-t border-ground-700/40 pt-3">
+              <p className="text-xs font-semibold text-ground-300">
+                Listen to live qualification
+              </p>
+              {recording.status === "processing" && (
+                <p className="mt-2 text-xs text-ground-400">Recording is processing…</p>
+              )}
+              {recording.status === "ready" && (
+                <div className="mt-2">
+                  <audio
+                    controls
+                    preload="metadata"
+                    src={recording.audioUrl}
+                    className="w-full max-w-xl"
+                  >
+                    Your browser does not support audio playback.
+                  </audio>
+                  <p className="mt-2 text-xs text-ground-500">
+                    Recorded from the controlled synthetic CALL-E qualification.
+                  </p>
+                </div>
+              )}
+              {(recording.status === "unavailable" || recording.status === "error") && (
+                <p className="mt-2 text-xs text-ground-400">
+                  Recording is not available for this run.
+                </p>
+              )}
+            </div>
+          )}
         </div>
       )}
     </section>

@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# Call recording - OPTIONAL BUT ENABLED.
+# Call recording - OPTIONAL AND DISABLED BY DEFAULT.
 #
 # Classification rationale: the resources are a private bucket, its public
 # access block, encryption, a lifecycle rule and one bucket policy. That is
@@ -14,6 +14,11 @@
 # Set enable_call_recording = false to skip it entirely; the qualification must
 # never fail merely because recording is unavailable.
 # ---------------------------------------------------------------------------
+
+locals {
+  recording_prefix          = "connect/${var.environment}/CallRecordings"
+  recording_url_ttl_seconds = 300
+}
 
 resource "aws_s3_bucket" "recordings" {
   count  = var.enable_call_recording ? 1 : 0
@@ -145,7 +150,7 @@ resource "aws_connect_instance_storage_config" "call_recordings" {
 
     s3_config {
       bucket_name   = aws_s3_bucket.recordings[0].id
-      bucket_prefix = "connect/${var.environment}/CallRecordings"
+      bucket_prefix = local.recording_prefix
 
       encryption_config {
         encryption_type = "KMS"

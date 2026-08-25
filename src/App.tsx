@@ -167,8 +167,9 @@ export default function App() {
                 The English persona is Ridgeline Industrial Supply. It
                 deliberately changes payment terms, so the deterministic Policy
                 Gateway must require human handling even when the phone
-                conversation succeeds. Call recording remains disabled; no real
-                supplier or production data is used.
+                conversation succeeds. Optional call recording is private and
+                used only for demo playback; no real supplier or production data
+                is used.
               </p>
             </Disclosure>
 
