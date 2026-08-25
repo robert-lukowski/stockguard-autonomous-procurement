@@ -317,25 +317,47 @@ describe("CallEApiAdapter", () => {
     );
     expect(body.task).toContain("calling on behalf of StockGuard");
     expect(body.task).toContain(
-      "The recipient is an automated supplier sales desk and will speak first",
+      "The automated supplier speaks first",
     );
     expect(body.task).toContain(
-      "Do not begin speaking immediately when the call connects",
+      "opening greeting ends with the exact phrase 'Please go ahead.'",
     );
     expect(body.task).toContain(
-      "completed the full opening greeting and there is a brief pause",
+      "Do not begin your introduction or qualification question before you hear that phrase",
     );
     expect(body.task).toContain(
       "If the recipient is speaking, never talk over them",
     );
     expect(body.task).toContain("already pinned to the English qualification profile");
     expect(body.task).toContain(
-      "naturally ask the recipient to confirm stock, unit price, and earliest delivery for 8 units of CF-220",
+      "naturally ask about availability for 8 units of CF-220",
     );
     expect(body.task).toContain(
-      "If the recipient provides offer validity in the first response, do not ask for it again",
+      "Refer to the requested product code naturally as 'CF-220'",
     );
-    expect(body.task).toContain("Ask at least one follow-up question specifically about the commercial or payment terms");
+    expect(body.task).toContain(
+      "Never describe capitalization, punctuation, hyphens, or identifier formatting",
+    );
+    expect(body.task).toContain(
+      "Once all required qualification facts are known, thank the recipient, say goodbye, and end the call",
+    );
+    expect(body.task).toContain("Do not ask open-ended closing questions");
+    expect(body.task).toContain("Do not ask for supplier references, quote references");
+    expect(body.task).toContain("Do not reconfirm facts already clearly stated");
+    expect(body.task).toContain("Do not use health-check questions");
+    expect(body.task).toContain("rephrase the current question once");
+    expect(body.task).toContain("Track which qualification fields have already been explicitly confirmed");
+    expect(body.task).not.toContain("RFQ-EN-QUALIFICATION");
+    expect(body.task).not.toContain("EN_SUPPLIER");
+    expect(body.task).not.toContain("synthetic-suppliers-2026-08-v1");
+    expect(body.task).not.toContain(request.workflowId);
+    expect(body.metadata).toMatchObject({
+      workflow_run_id: request.workflowId,
+      synthetic_rfq_id: "RFQ-EN-QUALIFICATION",
+      synthetic_routing_code: "000001",
+      synthetic_supplier_profile: "EN_SUPPLIER",
+      synthetic_dataset_version: "synthetic-suppliers-2026-08-v1",
+    });
     expect(body.recipients[0]).toEqual({
       phones: [syntheticRequest.phoneE164],
       region: "US",

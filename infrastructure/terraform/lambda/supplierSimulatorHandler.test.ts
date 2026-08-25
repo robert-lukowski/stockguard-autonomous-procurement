@@ -1,4 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const bedrock = vi.hoisted(() => ({ send: vi.fn() }));
+
+vi.mock("@aws-sdk/client-bedrock-runtime", () => ({
+  BedrockRuntimeClient: class {
+    send = bedrock.send;
+  },
+  ConverseCommand: class {
+    constructor(readonly input: unknown) {}
+  },
+}));
+
 import type { LexV2Event } from "../../../src/server/supplier-simulator";
 import { lexFulfillment } from "./supplierSimulatorHandler";
 
@@ -10,6 +22,8 @@ const env = {
   QUALIFICATION_SKU: "CF-220",
   QUALIFICATION_QUANTITY: "8",
   QUALIFICATION_REQUIRED_BY: "2026-08-28T12:00:00+02:00",
+  BEDROCK_SUPPLIER_MODEL_ID: "amazon.nova-micro-v1:0",
+  BEDROCK_SUPPLIER_TIMEOUT_MS: "3000",
 };
 
 function event(overrides: Partial<LexV2Event> = {}): LexV2Event {
@@ -23,6 +37,7 @@ function event(overrides: Partial<LexV2Event> = {}): LexV2Event {
 
 beforeEach(() => {
   vi.resetModules();
+  bedrock.send.mockReset().mockRejectedValue(new Error("test fallback"));
   for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
   vi.spyOn(console, "log").mockImplementation(() => {});
 });
@@ -84,7 +99,9 @@ describe("supplier simulator Lambda composition root", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     await lexFulfillment(event());
 
-    const logged = String(log.mock.calls[0][0]);
+    const logged = log.mock.calls.flat().join(" ");
+    expect(logged).toContain("supplier_response_realization");
+    expect(logged).toContain("deterministic-fallback");
     expect(logged).toContain("supplier_simulator_invocation");
     expect(logged).not.toContain("Ridgeline Industrial Supply");
     expect(logged).not.toContain("CF-220");

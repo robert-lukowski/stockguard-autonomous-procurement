@@ -1,9 +1,10 @@
 # ---------------------------------------------------------------------------
 # Lambda execution role.
 #
-# Architecture A needs CloudWatch Logs and nothing else. The handler makes no
-# AWS API calls at all - verified by the bundle containing zero external
-# require() calls - so any additional permission here would be unjustified.
+# Supplier facts remain deterministic. The Lambda may write its own logs and
+# invoke exactly one foundation model to realize those facts as natural spoken
+# English. Bedrock cannot change the quote object, and the deterministic text
+# remains the fallback when realization fails.
 # ---------------------------------------------------------------------------
 
 data "aws_iam_policy_document" "lambda_assume" {
@@ -43,4 +44,19 @@ resource "aws_iam_role_policy" "supplier_simulator_logs" {
   name   = "cloudwatch-logs"
   role   = aws_iam_role.supplier_simulator.id
   policy = data.aws_iam_policy_document.supplier_simulator_logs.json
+}
+
+data "aws_iam_policy_document" "supplier_simulator_bedrock" {
+  statement {
+    sid       = "RealizeDeterministicSupplierResponse"
+    effect    = "Allow"
+    actions   = ["bedrock:InvokeModel"]
+    resources = ["arn:aws:bedrock:eu-central-1::foundation-model/amazon.nova-micro-v1:0"]
+  }
+}
+
+resource "aws_iam_role_policy" "supplier_simulator_bedrock" {
+  name   = "bedrock-supplier-response"
+  role   = aws_iam_role.supplier_simulator.id
+  policy = data.aws_iam_policy_document.supplier_simulator_bedrock.json
 }

@@ -123,7 +123,7 @@ describe("infrastructure invariants", () => {
     );
     expect(primary).toContain('Text = "Please go ahead."');
     expect(connect).toContain(
-      "Sorry, I didn't catch that. Could you repeat what you're calling about?",
+      "Sorry, I didn't catch that. Could you repeat your last question?",
     );
     expect(primary.match(/NextAction = "lex-retry"/g)).toHaveLength(2);
     expect(primary).toContain('NextAction = "disconnect"');
@@ -152,6 +152,25 @@ describe("infrastructure invariants", () => {
     expect(lex).toContain('"enabled":true,"assistedNluMode":"Fallback"');
     expect(lex).not.toContain('"assistedNluMode":"Primary"');
     expect(lex).toContain("generation-4-assisted-nlu-fallback");
+  });
+
+  it("scopes supplier response realization to Nova Micro with a short fallback timeout", () => {
+    const iam = tf("iam.tf");
+    const lambda = tf("lambda.tf");
+    const pkg = JSON.parse(repoFile("package.json"));
+
+    expect(iam).toContain('actions   = ["bedrock:InvokeModel"]');
+    expect(iam).toContain(
+      'resources = ["arn:aws:bedrock:eu-central-1::foundation-model/amazon.nova-micro-v1:0"]',
+    );
+    expect(lambda).toMatch(
+      /BEDROCK_SUPPLIER_MODEL_ID\s*=\s*"amazon\.nova-micro-v1:0"/,
+    );
+    expect(lambda).toMatch(/BEDROCK_SUPPLIER_TIMEOUT_MS\s*=\s*"3000"/);
+    expect(pkg.dependencies["@aws-sdk/client-bedrock-runtime"]).toBeDefined();
+    expect(pkg.scripts["build:lambda"]).not.toContain(
+      "external:@aws-sdk/client-bedrock-runtime",
+    );
   });
 
   it("exposes offer validity as a first-class natural-language intent", () => {

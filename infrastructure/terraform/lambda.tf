@@ -13,7 +13,7 @@ data "archive_file" "supplier_simulator" {
 
 resource "aws_lambda_function" "supplier_simulator" {
   function_name = "${local.name_prefix}-supplier-simulator"
-  description   = "Deterministic synthetic supplier for CALL-E qualification. No AWS SDK, no secrets, no outbound network."
+  description   = "Deterministic supplier facts with Bedrock natural-language realization and deterministic fallback."
   role          = aws_iam_role.supplier_simulator.arn
 
   filename         = data.archive_file.supplier_simulator.output_path
@@ -38,11 +38,13 @@ resource "aws_lambda_function" "supplier_simulator" {
       # Deliberately the alias NAME, not its generated id: the alias's code
       # hook points at this function, so referencing the id here would create
       # a Lambda <-> alias dependency cycle.
-      ALLOWED_LEX_ALIAS_NAMES   = local.lex_alias_name
-      ALLOWED_LEX_LOCALES       = local.lex_locale_id
-      QUALIFICATION_SKU         = var.qualification_sku
-      QUALIFICATION_QUANTITY    = tostring(var.qualification_quantity)
-      QUALIFICATION_REQUIRED_BY = var.qualification_required_by
+      ALLOWED_LEX_ALIAS_NAMES     = local.lex_alias_name
+      ALLOWED_LEX_LOCALES         = local.lex_locale_id
+      QUALIFICATION_SKU           = var.qualification_sku
+      QUALIFICATION_QUANTITY      = tostring(var.qualification_quantity)
+      QUALIFICATION_REQUIRED_BY   = var.qualification_required_by
+      BEDROCK_SUPPLIER_MODEL_ID   = "amazon.nova-micro-v1:0"
+      BEDROCK_SUPPLIER_TIMEOUT_MS = "3000"
     }
   }
 

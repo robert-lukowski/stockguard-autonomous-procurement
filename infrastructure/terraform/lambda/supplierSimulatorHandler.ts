@@ -8,15 +8,16 @@
  * `createSupplierSimulatorLexHandler`, and duplicating them here would let the
  * deployed behaviour drift away from what the test suite covers.
  *
+ * Supplier business facts remain deterministic and are produced before any
+ * model call. Bedrock only realizes those facts as natural spoken English;
+ * every model failure falls back to the existing deterministic message.
+ *
  * Deliberately absent, and each absence is a safety property:
- *   - no AWS SDK: nothing to call, so no IAM beyond CloudWatch Logs
- *   - no outbound HTTP
  *   - no CALL-E credential
  *   - no secret of any kind
- *   - no randomness, no clock-dependent branching, no generative model
+ *   - no model authority over quantities, prices, dates, or commercial terms
  *
- * CALL-E is the conversational AI under test. A supplier that improvised would
- * make the test prove nothing.
+ * The supplier may vary wording, never facts.
  */
 import {
   InMemorySyntheticSupplierStore,
@@ -28,6 +29,9 @@ import {
   type LexV2Response,
   type SyntheticRfq,
 } from "../../../src/server/supplier-simulator";
+import {
+  BedrockSupplierResponseRealizer,
+} from "../../../src/server/supplier-simulator/BedrockSupplierResponseRealizer";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -87,6 +91,18 @@ function buildHandler(): (event: LexV2Event) => Promise<LexV2Response> {
       [qualificationRfq(sku, quantity)],
     ),
   );
+  const bedrockTimeoutMs = Number.parseInt(
+    required("BEDROCK_SUPPLIER_TIMEOUT_MS"),
+    10,
+  );
+  if (!Number.isInteger(bedrockTimeoutMs) || bedrockTimeoutMs <= 0) {
+    throw new Error("BEDROCK_SUPPLIER_TIMEOUT_MS must be a positive integer");
+  }
+  const responseRealizer = new BedrockSupplierResponseRealizer({
+    modelId: required("BEDROCK_SUPPLIER_MODEL_ID"),
+    timeoutMs: bedrockTimeoutMs,
+    region: "eu-central-1",
+  });
 
   /*
    * Alias is allowlisted by NAME, not id.
@@ -98,14 +114,18 @@ function buildHandler(): (event: LexV2Event) => Promise<LexV2Response> {
    * circular reference. `aliasAllowed` still rejects everything when no
    * allowlist is configured.
    */
-  return createSupplierSimulatorLexHandler(service, {
-    enabled: process.env.SIMULATOR_ENABLED === "true",
-    allowedBotIds: list("ALLOWED_LEX_BOT_IDS"),
-    allowedAliasIds: [],
-    allowedAliasNames: list("ALLOWED_LEX_ALIAS_NAMES"),
-    allowedLocales: list("ALLOWED_LEX_LOCALES") as LexSimulatorLocale[],
-    qualificationRfqId: QUALIFICATION_RFQ_ID,
-  });
+  return createSupplierSimulatorLexHandler(
+    service,
+    {
+      enabled: process.env.SIMULATOR_ENABLED === "true",
+      allowedBotIds: list("ALLOWED_LEX_BOT_IDS"),
+      allowedAliasIds: [],
+      allowedAliasNames: list("ALLOWED_LEX_ALIAS_NAMES"),
+      allowedLocales: list("ALLOWED_LEX_LOCALES") as LexSimulatorLocale[],
+      qualificationRfqId: QUALIFICATION_RFQ_ID,
+    },
+    responseRealizer,
+  );
 }
 
 export async function lexFulfillment(event: LexV2Event): Promise<LexV2Response> {

@@ -232,8 +232,8 @@ export class CallEApiAdapter implements SupplierCallingPort {
       ? fixedQualification
         ? [
             "The recipient is the approved English qualification supplier endpoint.",
-            "This endpoint is already pinned to the English qualification profile. Do not say or ask for a routing code; begin directly with the procurement qualification.",
-            `The expected synthetic profile is ${syntheticRouting.supplierProfileId} and RFQ is ${syntheticRouting.rfqId}.`,
+            "This endpoint is already pinned to the English qualification profile; begin directly with the procurement qualification.",
+            "Never speak internal RFQ IDs, workflow IDs, supplier profile IDs, dataset versions, metadata values, routing codes, or other internal routing identifiers to the recipient.",
           ]
         : [
             "The recipient is the approved multilingual supplier qualification endpoint.",
@@ -248,8 +248,9 @@ export class CallEApiAdapter implements SupplierCallingPort {
         : `Use ${request.locale} throughout the conversation.`;
     const openingInstructions = fixedQualification
       ? [
-          'After the greeting, say: "Hello, I\'m an AI procurement assistant calling on behalf of StockGuard for a supplier qualification demo. This call only requests supplier availability and commercial information and cannot create a binding order."',
-          `After the disclosure, naturally ask the recipient to confirm stock, unit price, and earliest delivery for ${request.requestedQuantity} units of ${request.sku}.`,
+          "After hearing the complete greeting, naturally disclose that you are an AI procurement assistant calling on behalf of StockGuard.",
+          "Explain that this is a non-binding supplier qualification call for availability and commercial information.",
+          `Then naturally ask about availability for ${request.requestedQuantity} units of ${request.sku}.`,
         ]
       : [
           "After the greeting, disclose that you are an AI procurement assistant calling on behalf of StockGuard for a supplier qualification demo.",
@@ -259,14 +260,29 @@ export class CallEApiAdapter implements SupplierCallingPort {
     const task = [
       `Call the approved supplier ${request.supplierName}.`,
       fixedQualification
-        ? "The recipient is an automated supplier sales desk and will speak first. Do not begin speaking immediately when the call connects. Wait until the recipient has completed the full opening greeting and there is a brief pause before starting your introduction. If the recipient is speaking, never talk over them."
+        ? "The automated supplier speaks first. Its opening greeting ends with the exact phrase 'Please go ahead.' Do not begin your introduction or qualification question before you hear that phrase. If the recipient is speaking, never talk over them."
         : "The recipient will speak first. Do not begin speaking immediately when the call connects. Wait until the recipient has completed the full opening greeting and there is a brief pause before starting your introduction. If the recipient is speaking, never talk over them.",
       ...routingInstructions,
       languageInstruction,
       ...openingInstructions,
-      "Collect unit price, currency, earliest delivery, offer validity, and any changed commercial terms.",
-      "If the recipient provides offer validity in the first response, do not ask for it again.",
-      "Ask at least one follow-up question specifically about the commercial or payment terms.",
+      ...(fixedQualification
+        ? [
+            `Refer to the requested product code naturally as '${request.sku}'. Never describe capitalization, punctuation, hyphens, or identifier formatting.`,
+            "Collect only availability, available quantity, unit price, currency, earliest delivery, offer validity, and commercial or payment terms. Record an opt-out only if the recipient raises it.",
+            "Track which qualification fields have already been explicitly confirmed. Do not request them again unless the recipient's answer was ambiguous or contradictory.",
+            "Ensure commercial or payment terms are explicitly confirmed, but ask a focused follow-up only if they are not already clear.",
+            "Once all required qualification facts are known, thank the recipient, say goodbye, and end the call.",
+            "Do not ask open-ended closing questions such as 'anything else?'.",
+            "Do not ask for supplier references, quote references, RFQ references, purchase-order references, or other identifiers.",
+            "Do not reconfirm facts already clearly stated unless clarification is actually necessary.",
+            "Do not use health-check questions such as 'Can you hear me?' or 'Are you there?' unless there has been a genuine extended silence.",
+            "After a genuine misunderstanding or a 'Sorry' response, rephrase the current question once instead of restarting the qualification.",
+          ]
+        : [
+            "Collect unit price, currency, earliest delivery, offer validity, and any changed commercial terms.",
+            "If the recipient provides offer validity in the first response, do not ask for it again.",
+            "Ask at least one follow-up question specifically about the commercial or payment terms.",
+          ]),
       "If the recipient opts out, stop the conversation and record the opt-out.",
       "Do not collect payment data, credentials, access codes, or unrelated personal information.",
     ].join(" ");

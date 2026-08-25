@@ -8,12 +8,17 @@ export {
   syntheticSupplierProfiles,
 } from "./profiles";
 export { createSupplierSimulatorLexHandler } from "./lexV2";
+export { realizeSupplierResponse } from "./SupplierResponseRealizer";
 export { callELocaleFor } from "./types";
 export type {
   LexV2Event,
   LexV2Response,
   SupplierSimulatorLambdaGuard,
 } from "./lexV2";
+export type {
+  SupplierResponseRealizationRequest,
+  SupplierResponseRealizer,
+} from "./SupplierResponseRealizer";
 export type {
   LexSupplierLocale,
   LexSimulatorLocale,

@@ -1,5 +1,9 @@
 import { syntheticSupplierProfiles } from "./profiles";
 import { SupplierSimulatorService } from "./SupplierSimulatorService";
+import {
+  realizeSupplierResponse,
+  type SupplierResponseRealizer,
+} from "./SupplierResponseRealizer";
 import type {
   LexSimulatorLocale,
   SupplierProfileId,
@@ -156,6 +160,7 @@ function failed(event: LexV2Event, code: string): LexV2Response {
 export function createSupplierSimulatorLexHandler(
   service: SupplierSimulatorService,
   guard: SupplierSimulatorLambdaGuard,
+  responseRealizer?: SupplierResponseRealizer,
 ): (event: LexV2Event) => Promise<LexV2Response> {
   return async (event) => {
     if (!guard.enabled) return failed(event, "SIMULATOR_DISABLED");
@@ -227,6 +232,13 @@ export function createSupplierSimulatorLexHandler(
       if (result.quote.locale !== event.bot.localeId) {
         return failed(event, "PROFILE_LOCALE_MISMATCH");
       }
+      const naturalMessage = responseRealizer
+        ? await realizeSupplierResponse(
+            responseRealizer,
+            result,
+            event.inputTranscript,
+          )
+        : result.message;
       return {
         sessionState: {
           sessionAttributes: {
@@ -245,7 +257,7 @@ export function createSupplierSimulatorLexHandler(
             ? {}
             : { intent: { name: intent, state: "Fulfilled" as const } }),
         },
-        messages: [{ contentType: "PlainText", content: result.message }],
+        messages: [{ contentType: "PlainText", content: naturalMessage }],
       };
     } catch {
       return failed(event, "SYNTHETIC_DATA_UNAVAILABLE");
