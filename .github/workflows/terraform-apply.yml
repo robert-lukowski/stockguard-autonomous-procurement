@@ -14,6 +14,11 @@ on:
         required: false
         default: true
         type: boolean
+      enable_call_recording:
+        description: 'Include private automated-interaction recording in the reviewed plan'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -39,6 +44,7 @@ jobs:
       TF_VAR_connect_instance_id: ${{ secrets.AWS_CONNECT_INSTANCE_ID }}
       TF_VAR_aws_region: ${{ vars.AWS_REGION }}
       TF_VAR_simulator_enabled: ${{ inputs.simulator_enabled }}
+      TF_VAR_enable_call_recording: ${{ inputs.enable_call_recording }}
 
     steps:
       - name: Verify explicit confirmation
@@ -126,6 +132,7 @@ jobs:
           AWS_REGION: ${{ vars.AWS_REGION }}
           INSTANCE_ID: ${{ secrets.AWS_CONNECT_INSTANCE_ID }}
           SIMULATOR: ${{ inputs.simulator_enabled }}
+          RECORDING: ${{ inputs.enable_call_recording }}
         run: |
           set -euo pipefail
           terraform output -json > tf-outputs.json
@@ -133,7 +140,8 @@ jobs:
             --outputs tf-outputs.json \
             --instance-id "$INSTANCE_ID" \
             --region "$AWS_REGION" \
-            --expect-simulator "$SIMULATOR"
+            --expect-simulator "$SIMULATOR" \
+            --expect-recording "$RECORDING"
 
       - name: Summary
         shell: bash
@@ -142,6 +150,7 @@ jobs:
             echo '### Terraform apply completed'
             echo ''
             echo "simulator_enabled: \`${{ inputs.simulator_enabled }}\`"
+            echo "enable_call_recording: \`${{ inputs.enable_call_recording }}\`"
             echo ''
-            echo 'Recording is not controlled by this workflow; configure it separately in Amazon Connect when needed.'
+            echo 'Apply used the exact saved tfplan produced in this job.'
           } >> "$GITHUB_STEP_SUMMARY"

@@ -2,6 +2,10 @@ import type { WorkflowResult } from "../server/workflow";
 
 export type LiveQualificationEnvelope = {
   runtime: "LIVE_CALLE";
+  recordingLookup?: {
+    workflowId: string;
+    startedAt: string;
+  };
   liveCall: {
     callId: string | null;
     outcome: string | null;

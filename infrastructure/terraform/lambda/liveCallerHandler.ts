@@ -8,9 +8,17 @@ import {
   MockPurchaseOrderAdapter,
   ProcurementWorkflow,
 } from "../../../src/server/workflow";
+import {
+  findRecentRecording,
+  InvalidRecordingLookupError,
+  isRecordingConfigured,
+  parseRecordingLookupReference,
+  recordingConfigurationFromEnvironment,
+} from "./recordingLookup";
 
 type FunctionUrlEvent = {
   headers?: Record<string, string | undefined>;
+  queryStringParameters?: Record<string, string | undefined>;
   requestContext?: {
     http?: {
       method?: string;
@@ -133,31 +141,11 @@ function numberEnv(name: string): number {
   return value;
 }
 
-/**
- * Public Function URL handler for the final judge E2E path.
- *
- * The browser can provide only two things: the judge PIN and the explicit
- * PLACE-CALL confirmation. The destination, supplier profile, SKU, quantity,
- * deadline and CALL-E credential are all server-side and cannot be overridden
- * by request body or query string.
- */
-export async function handler(event: FunctionUrlEvent): Promise<FunctionUrlResponse> {
-  if (event.requestContext?.http?.method !== "POST") {
-    return json(405, { error: "METHOD_NOT_ALLOWED" });
-  }
-  if (header(event, "x-confirm") !== "PLACE-CALL") {
-    return json(400, { error: "CONFIRMATION_REQUIRED" });
-  }
-
-  try {
-    const runtimeSecret = await readRuntimeSecret();
-    const suppliedPin = header(event, "x-judge-pin");
-    if (!suppliedPin || !sameSecret(suppliedPin, runtimeSecret.JUDGE_PIN)) {
-      return json(401, { error: "ACCESS_DENIED" });
-    }
-
-    const now = new Date();
-    const workflowId = `live-en-${Date.now()}-${randomUUID().slice(0, 8)}`;
+async function runLiveQualification(
+  runtimeSecret: RuntimeSecret,
+  workflowId: string,
+  now: Date,
+) {
     const quantity = numberEnv("QUALIFICATION_QUANTITY");
     const input = buildQualificationInput({
       workflowId,
@@ -167,8 +155,6 @@ export async function handler(event: FunctionUrlEvent): Promise<FunctionUrlRespo
       requiredBy: required("QUALIFICATION_REQUIRED_BY"),
       now,
     });
-
-    console.log(JSON.stringify({ event: "PIN_OK", workflowId }));
 
     const supplierCalls = new CallEApiAdapter({
       apiKey: runtimeSecret.CALLE_API_KEY,
@@ -231,18 +217,151 @@ export async function handler(event: FunctionUrlEvent): Promise<FunctionUrlRespo
       }),
     );
 
-    return json(200, {
+    return {
       runtime: "LIVE_CALLE",
       liveCall,
       workflow: result,
-    });
-  } catch (error) {
-    console.error(
-      JSON.stringify({
-        event: "QUALIFICATION_CALLER_ERROR",
-        message: error instanceof Error ? error.message : "unknown error",
-      }),
-    );
-    return json(502, { error: "LIVE_QUALIFICATION_FAILED" });
-  }
+    } as const;
 }
+
+type LiveCallerDependencies = {
+  readSecret: typeof readRuntimeSecret;
+  runQualification: typeof runLiveQualification;
+  findRecording: typeof findRecentRecording;
+  now: () => Date;
+  createWorkflowId: (now: Date) => string;
+};
+
+/**
+ * Public Function URL handler for the final judge E2E path.
+ *
+ * POST is the only path that can place a call and still requires the explicit
+ * PLACE-CALL confirmation. GET is a PIN-gated, read-only lookup for the
+ * optional recording artifact. Neither request can choose a destination,
+ * supplier profile, SKU, quantity, deadline, or credential.
+ */
+export function createHandler(overrides: Partial<LiveCallerDependencies> = {}) {
+  const dependencies: LiveCallerDependencies = {
+    readSecret: readRuntimeSecret,
+    runQualification: runLiveQualification,
+    findRecording: findRecentRecording,
+    now: () => new Date(),
+    createWorkflowId: (now) => `live-en-${now.getTime()}-${randomUUID().slice(0, 8)}`,
+    ...overrides,
+  };
+
+  return async function liveCallerHandler(
+    event: FunctionUrlEvent,
+  ): Promise<FunctionUrlResponse> {
+    const method = event.requestContext?.http?.method;
+    if (method !== "GET" && method !== "POST") {
+      return json(405, { error: "METHOD_NOT_ALLOWED" });
+    }
+    if (method === "POST" && header(event, "x-confirm") !== "PLACE-CALL") {
+      return json(400, { error: "CONFIRMATION_REQUIRED" });
+    }
+
+    try {
+      const runtimeSecret = await dependencies.readSecret();
+      const suppliedPin = header(event, "x-judge-pin");
+      if (!suppliedPin || !sameSecret(suppliedPin, runtimeSecret.JUDGE_PIN)) {
+        return json(401, { error: "ACCESS_DENIED" });
+      }
+
+      const now = dependencies.now();
+      if (method === "GET") {
+        let reference;
+        try {
+          reference = parseRecordingLookupReference(event.queryStringParameters, now);
+        } catch (error) {
+          if (error instanceof InvalidRecordingLookupError) {
+            return json(400, { error: "INVALID_RECORDING_LOOKUP" });
+          }
+          throw error;
+        }
+
+        const configuration = recordingConfigurationFromEnvironment();
+        if (!configuration) return json(200, { status: "DISABLED" });
+
+        const lookupStartedAt = Date.now();
+        console.log(
+          JSON.stringify({
+            event: "RECORDING_LOOKUP_STARTED",
+            workflowId: reference.workflowId,
+          }),
+        );
+        try {
+          const recording = await dependencies.findRecording(
+            reference,
+            configuration,
+          );
+          const elapsedMs = Date.now() - lookupStartedAt;
+          if (recording.status === "PROCESSING") {
+            console.log(
+              JSON.stringify({
+                event: "RECORDING_NOT_READY",
+                workflowId: reference.workflowId,
+                elapsedMs,
+                candidateCount: recording.candidateCount,
+                status: recording.status,
+              }),
+            );
+            return json(200, { status: "PROCESSING" });
+          }
+
+          console.log(
+            JSON.stringify({
+              event: "RECORDING_READY",
+              workflowId: reference.workflowId,
+              elapsedMs,
+              candidateCount: recording.candidateCount,
+              status: recording.status,
+            }),
+          );
+          return json(200, {
+            status: "READY",
+            audioUrl: recording.audioUrl,
+            contentType: recording.contentType,
+            recordedAt: recording.recordedAt,
+          });
+        } catch {
+          console.error(
+            JSON.stringify({
+              event: "RECORDING_LOOKUP_FAILED",
+              workflowId: reference.workflowId,
+              elapsedMs: Date.now() - lookupStartedAt,
+              status: "ERROR",
+            }),
+          );
+          return json(502, { error: "RECORDING_LOOKUP_FAILED" });
+        }
+      }
+
+      const workflowId = dependencies.createWorkflowId(now);
+      const workflowStartedAt = now.toISOString();
+      console.log(JSON.stringify({ event: "PIN_OK", workflowId }));
+      const result = await dependencies.runQualification(runtimeSecret, workflowId, now);
+      return json(200, {
+        ...result,
+        ...(isRecordingConfigured()
+          ? {
+              recordingLookup: {
+                workflowId,
+                startedAt: workflowStartedAt,
+              },
+            }
+          : {}),
+      });
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          event: "QUALIFICATION_CALLER_ERROR",
+          message: error instanceof Error ? error.message : "unknown error",
+        }),
+      );
+      return json(502, { error: "LIVE_QUALIFICATION_FAILED" });
+    }
+  };
+}
+
+export const handler = createHandler();

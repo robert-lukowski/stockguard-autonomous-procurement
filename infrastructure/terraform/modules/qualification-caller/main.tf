@@ -18,6 +18,26 @@ variable "qualification_required_by" {
   type = string
 }
 
+variable "recording_enabled" {
+  type = bool
+}
+
+variable "recording_bucket_name" {
+  type = string
+}
+
+variable "recording_bucket_arn" {
+  type = string
+}
+
+variable "recording_prefix" {
+  type = string
+}
+
+variable "recording_url_ttl_seconds" {
+  type = number
+}
+
 locals {
   function_name = "${var.name_prefix}-caller"
   pages_origin  = "https://robert-lukowski.github.io"
@@ -78,6 +98,38 @@ resource "aws_iam_role_policy" "this" {
   })
 }
 
+resource "aws_iam_role_policy" "recordings" {
+  count = var.recording_enabled ? 1 : 0
+  name  = "${local.function_name}-recording-lookup"
+  role  = aws_iam_role.this.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "ListRecentCallRecordings"
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
+        Resource = var.recording_bucket_arn
+        Condition = {
+          StringLike = {
+            "s3:prefix" = [
+              var.recording_prefix,
+              "${var.recording_prefix}/*",
+            ]
+          }
+        }
+      },
+      {
+        Sid      = "ReadSelectedCallRecording"
+        Effect   = "Allow"
+        Action   = ["s3:GetObject"]
+        Resource = "${var.recording_bucket_arn}/${var.recording_prefix}/*"
+      }
+    ]
+  })
+}
+
 data "archive_file" "this" {
   type        = "zip"
   source_dir  = "${path.root}/build/liveCaller"
@@ -110,6 +162,10 @@ resource "aws_lambda_function" "this" {
       QUALIFICATION_SKU         = var.qualification_sku
       QUALIFICATION_QUANTITY    = tostring(var.qualification_quantity)
       QUALIFICATION_REQUIRED_BY = var.qualification_required_by
+      RECORDING_ENABLED         = tostring(var.recording_enabled)
+      RECORDING_BUCKET          = var.recording_bucket_name
+      RECORDING_PREFIX          = var.recording_prefix
+      RECORDING_URL_TTL_SECONDS = tostring(var.recording_url_ttl_seconds)
     }
   }
 
@@ -129,7 +185,7 @@ resource "aws_lambda_function_url" "this" {
   cors {
     allow_credentials = false
     allow_headers     = ["content-type", "x-confirm", "x-judge-pin"]
-    allow_methods     = ["POST"]
+    allow_methods     = ["GET", "POST"]
     allow_origins     = [local.pages_origin]
     max_age           = 300
   }

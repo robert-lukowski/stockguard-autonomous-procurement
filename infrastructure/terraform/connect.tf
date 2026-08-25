@@ -48,8 +48,9 @@ removed {
 # The contact flow: the smallest thing that proves the vertical slice
 #   Connect -> Lex V2 alias -> Lambda synthetic supplier.
 #
-# Deliberately five actions: logging, a greeting that completes before Lex
-# listens, the primary Lex turn, one bounded retry, and disconnect.
+# Deliberately six actions: logging, automated-interaction recording, a greeting
+# that completes before Lex listens, the primary Lex turn, one bounded retry,
+# and disconnect.
 #
 #   UpdateContactTextToSpeechVoice  removed. Joanna is the documented default
 #                                   when the action never runs, and the Lex
@@ -80,6 +81,17 @@ resource "aws_connect_contact_flow" "supplier_simulator" {
         Identifier  = "set-logging"
         Type        = "UpdateFlowLoggingBehavior"
         Parameters  = { FlowLoggingBehavior = "Enabled" }
+        Transitions = { NextAction = "enable-recording" }
+      },
+      {
+        Identifier = "enable-recording"
+        Type       = "UpdateContactRecordingBehavior"
+        Parameters = {
+          RecordingBehavior = {
+            IVRRecordingBehavior = "Enabled"
+          }
+        }
+        # The flow-language action has no result conditions or error branches.
         Transitions = { NextAction = "supplier-greeting" }
       },
       {

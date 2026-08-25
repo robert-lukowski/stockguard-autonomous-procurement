@@ -90,11 +90,26 @@ describe("infrastructure invariants", () => {
     expect(lambda).not.toMatch(/source_arn\s*=\s*"[^"]*bot-alias\/\*/);
   });
 
-  it("keeps the Connect flow recording-free", () => {
+  it("enables automated-interaction recording before the supplier greeting", () => {
     const connect = tf("connect.tf");
+    const loggingStart = connect.indexOf('Identifier  = "set-logging"');
+    const recordingStart = connect.indexOf('Identifier = "enable-recording"');
+    const greetingStart = connect.indexOf('Identifier = "supplier-greeting"');
+
     expect(connect).toContain("ConnectParticipantWithLexBot");
     expect(connect).toContain("DisconnectParticipant");
-    expect(connect).not.toContain("UpdateContactRecordingBehavior");
+    expect(loggingStart).toBeGreaterThan(-1);
+    expect(recordingStart).toBeGreaterThan(loggingStart);
+    expect(greetingStart).toBeGreaterThan(recordingStart);
+    expect(connect.slice(loggingStart, recordingStart)).toContain(
+      'NextAction = "enable-recording"',
+    );
+    const recording = connect.slice(recordingStart, greetingStart);
+    expect(recording).toContain('Type       = "UpdateContactRecordingBehavior"');
+    expect(recording).toContain('IVRRecordingBehavior = "Enabled"');
+    expect(recording).toContain('NextAction = "supplier-greeting"');
+    expect(recording).not.toContain("Errors");
+    expect(recording).not.toMatch(/NextAction = "lex-(?:primary|retry)"/);
     expect(connect).not.toContain("aws_connect_phone_number");
   });
 
@@ -187,6 +202,63 @@ describe("infrastructure invariants", () => {
       /variable "log_retention_days"[\s\S]*?default\s*=\s*\d+/,
     );
   });
+
+  it("keeps recordings private, encrypted, lifecycle-bounded, and attached once", () => {
+    const recording = tf("recording.tf");
+    for (const resource of [
+      'resource "aws_s3_bucket" "recordings"',
+      'resource "aws_s3_bucket_public_access_block" "recordings"',
+      'resource "aws_s3_bucket_server_side_encryption_configuration" "recordings"',
+      'resource "aws_s3_bucket_lifecycle_configuration" "recordings"',
+      'resource "aws_connect_instance_storage_config" "call_recordings"',
+    ]) {
+      expect(recording).toContain(resource);
+    }
+    for (const setting of [
+      "block_public_acls       = true",
+      "block_public_policy     = true",
+      "ignore_public_acls      = true",
+      "restrict_public_buckets = true",
+      'sse_algorithm = "AES256"',
+      "days = var.recording_retention_days",
+      'resource_type = "CALL_RECORDINGS"',
+      "bucket_prefix = local.recording_prefix",
+    ]) {
+      expect(recording).toContain(setting);
+    }
+  });
+
+  it("gives only the caller scoped recording lookup permissions and environment", () => {
+    const caller = repoFile(
+      "infrastructure",
+      "terraform",
+      "modules",
+      "qualification-caller",
+      "main.tf",
+    );
+    const pkg = JSON.parse(repoFile("package.json"));
+
+    expect(caller).toContain('Action   = ["s3:ListBucket"]');
+    expect(caller).toContain('"s3:prefix"');
+    expect(caller).toContain('Action   = ["s3:GetObject"]');
+    expect(caller).toContain('Resource = "${var.recording_bucket_arn}/${var.recording_prefix}/*"');
+    expect(caller).not.toMatch(/Action\s*=\s*\["s3:\*"\]/);
+    for (const variable of [
+      "RECORDING_ENABLED",
+      "RECORDING_BUCKET",
+      "RECORDING_PREFIX",
+      "RECORDING_URL_TTL_SECONDS",
+    ]) {
+      expect(caller).toContain(variable);
+    }
+    expect(tf("recording.tf")).toContain("recording_url_ttl_seconds = 300");
+    expect(pkg.dependencies["@aws-sdk/client-s3"]).toBeDefined();
+    expect(pkg.dependencies["@aws-sdk/s3-request-presigner"]).toBeDefined();
+    expect(pkg.scripts["build:lambda"]).not.toContain("external:@aws-sdk/client-s3");
+    expect(pkg.scripts["build:lambda"]).not.toContain(
+      "external:@aws-sdk/s3-request-presigner",
+    );
+  });
 });
 
 describe("Terraform workflow invariants", () => {
@@ -246,11 +318,16 @@ describe("Terraform workflow invariants", () => {
     }
   });
 
-  it("keeps simulator_enabled as the only runtime toggle in active workflows", () => {
+  it("adds one recording input to the apply workflow's saved-plan path", () => {
+    expect(plan).toContain("simulator_enabled:");
+    expect(plan).not.toContain("enable_call_recording:");
+    expect(apply).toContain("simulator_enabled:");
+    expect(apply).toMatch(
+      /enable_call_recording:[\s\S]*?default: false[\s\S]*?TF_VAR_enable_call_recording:/,
+    );
+    expect(apply).toContain("--expect-recording \"$RECORDING\"");
     for (const workflow of [plan, apply]) {
-      expect(workflow).toContain("simulator_enabled:");
       expect(workflow).not.toContain("recovery_mode:");
-      expect(workflow).not.toContain("enable_call_recording:");
     }
   });
 
@@ -301,5 +378,24 @@ describe("qualification harness safety", () => {
   it("is not wired into any npm script", () => {
     const pkg = JSON.parse(repoFile("package.json"));
     expect(JSON.stringify(pkg.scripts)).not.toContain("qualification");
+  });
+});
+
+describe("live recording UI invariants", () => {
+  const panel = repoFile("src", "ui", "LiveQualificationPanel.tsx");
+
+  it("renders the workflow before starting bounded recording polling", () => {
+    expect(panel.indexOf("setResult(envelope)")).toBeLessThan(
+      panel.indexOf("pollForRecording({"),
+    );
+    expect(panel).toContain("Recording is processing…");
+    expect(panel).toContain("Listen to live qualification");
+  });
+
+  it("uses a non-autoplay player and persists neither PIN nor URL", () => {
+    expect(panel).toMatch(/<audio[\s\S]*?controls[\s\S]*?preload="metadata"/);
+    expect(panel).not.toMatch(/<audio[\s\S]*?autoPlay/);
+    expect(panel).not.toContain("localStorage");
+    expect(panel).not.toContain("sessionStorage");
   });
 });
