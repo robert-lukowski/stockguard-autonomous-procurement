@@ -83,6 +83,7 @@ describe("BedrockSupplierResponseRealizer", () => {
     expect(systemPrompt).toBe(BEDROCK_SUPPLIER_SYSTEM_PROMPT);
     expect(systemPrompt).toContain("sales rep");
     expect(systemPrompt).toContain("Use only the facts in the JSON below");
+    expect(userPrompt).toContain('"intent":"GetSupplierQuote"');
     expect(userPrompt).toContain('"sku":"CF-220"');
     expect(userPrompt).toContain('"requestedQuantity":8');
     expect(userPrompt).toContain('"availableQuantity":8');
@@ -90,8 +91,11 @@ describe("BedrockSupplierResponseRealizer", () => {
     expect(userPrompt).toContain('"currency":"EUR"');
     expect(userPrompt).toContain('"deliveryAt":"2026-09-29');
     expect(userPrompt).toContain('"offerValidUntil":"2026-09-24');
-    expect(userPrompt).toContain('"commercialTermsChanged":true');
-    expect(userPrompt).toContain("net 30 to advance payment");
+    // Commercial terms are not part of the quote intent: they belong to
+    // ConfirmCommercialTerms and would otherwise be dumped into the quote
+    // reply (observed live). The supplier answers what it was asked.
+    expect(userPrompt).not.toContain("commercialTermsChanged");
+    expect(userPrompt).not.toContain("advance payment");
     // The caller utterance is no longer passed in - the intent is already
     // enough to decide the answer, and passing raw caller text is an
     // avoidable prompt-injection surface.
@@ -100,6 +104,42 @@ describe("BedrockSupplierResponseRealizer", () => {
     expect(userPrompt).not.toContain("qualification-run");
     expect(userPrompt).not.toContain("synthetic-suppliers-2026-08-v1");
     expect(options.abortSignal).toBeInstanceOf(AbortSignal);
+  });
+
+  it.each([
+    {
+      intent: "ConfirmCommercialTerms" as const,
+      mustContain: ['"intent":"ConfirmCommercialTerms"', "advance payment", '"commercialTermsChanged":true'],
+      mustNotContain: ['"unitPrice"', '"deliveryAt"', '"offerValidUntil"', '"availableQuantity"'],
+    },
+    {
+      intent: "ConfirmOfferValidity" as const,
+      mustContain: ['"intent":"ConfirmOfferValidity"', '"offerValidUntil":"2026-09-24'],
+      mustNotContain: ['"unitPrice"', '"deliveryAt"', "commercialTermsChanged", '"availableQuantity"'],
+    },
+    {
+      intent: "CheckRemainingQuantity" as const,
+      mustContain: ['"intent":"CheckRemainingQuantity"', '"sku":"CF-220"', '"availableQuantity":8', '"deliveryAt":"2026-09-29'],
+      mustNotContain: ['"unitPrice"', '"offerValidUntil"', "commercialTermsChanged"],
+    },
+    {
+      intent: "EndConversation" as const,
+      mustContain: ['"intent":"EndConversation"'],
+      mustNotContain: ['"unitPrice"', '"deliveryAt"', '"offerValidUntil"', "commercialTermsChanged", '"sku"'],
+    },
+  ])("scopes the JSON payload to $intent facts only", async ({ intent, mustContain, mustNotContain }) => {
+    const send = vi.fn().mockResolvedValue(response("Sure."));
+    const realizer = new BedrockSupplierResponseRealizer({
+      modelId: "eu.amazon.nova-micro-v1:0",
+      timeoutMs: 3_000,
+      client: { send } as BedrockConverseClient,
+    });
+
+    await realizer.realize({ ...request, intent });
+
+    const userPrompt = send.mock.calls[0][0].input.messages[0].content[0].text;
+    for (const needle of mustContain) expect(userPrompt).toContain(needle);
+    for (const needle of mustNotContain) expect(userPrompt).not.toContain(needle);
   });
 
   it("falls back after the Bedrock timeout without changing deterministic facts", async () => {
