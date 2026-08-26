@@ -106,8 +106,11 @@ describe("Lex supplier response realization", () => {
       offerValidUntil: expect.stringContaining("2026-09-24"),
       commercialTermsChanged: true,
       commercialTermsSummary: "Payment terms changed from net 30 to advance payment.",
-      latestCallerQuestion: "Can you confirm the quote?",
     }));
+    // The caller's raw utterance is deliberately not forwarded to the
+    // realizer: the intent is enough to decide what to answer, and
+    // avoiding it removes a prompt-injection surface.
+    expect(realize.mock.calls[0][0]).not.toHaveProperty("latestCallerQuestion");
   });
 
   it("keeps EndConversation fulfilled and closed", async () => {

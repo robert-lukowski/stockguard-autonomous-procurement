@@ -60,14 +60,19 @@ export const supplierCallResultSchema = {
         "offerValidUntil",
         "commercialTermsChanged",
       ],
+      // Descriptions ask for the recipient's own statement, not a verbatim
+      // transcription. Insisting on exact words forced CALL-E to steer the
+      // whole conversation toward literal quotable phrases; a short
+      // paraphrase or quote is enough for evidenceAppearsInTranscript to
+      // corroborate the field against the transcript.
       properties: {
-        skuConfirmed: { type: "string", description: "Exact words spoken by the recipient that confirm the SKU." },
-        availableQuantity: { type: "string", description: "Exact words spoken by the recipient that state available quantity." },
-        unitPrice: { type: "string", description: "Exact words spoken by the recipient that state unit price." },
-        currency: { type: "string", description: "Exact words spoken by the recipient that state currency." },
-        deliveryAt: { type: "string", description: "Exact words spoken by the recipient that state delivery timing." },
-        offerValidUntil: { type: "string", description: "Exact words spoken by the recipient that state quote validity." },
-        commercialTermsChanged: { type: "string", description: "Exact words spoken by the recipient about changed or unchanged commercial terms." },
+        skuConfirmed: { type: "string", description: "The recipient's own statement (short paraphrase or quote) confirming the SKU." },
+        availableQuantity: { type: "string", description: "The recipient's own statement confirming available quantity." },
+        unitPrice: { type: "string", description: "The recipient's own statement confirming the unit price." },
+        currency: { type: "string", description: "The recipient's own statement confirming the currency." },
+        deliveryAt: { type: "string", description: "The recipient's own statement confirming delivery timing." },
+        offerValidUntil: { type: "string", description: "The recipient's own statement confirming quote validity." },
+        commercialTermsChanged: { type: "string", description: "The recipient's own statement confirming whether commercial terms changed." },
       },
     },
   },

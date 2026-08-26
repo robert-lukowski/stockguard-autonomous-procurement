@@ -15,7 +15,6 @@ export type SupplierResponseRealizationRequest = {
   offerValidUntil: string;
   commercialTermsChanged: boolean;
   commercialTermsSummary: string;
-  latestCallerQuestion: string;
 };
 
 export interface SupplierResponseRealizer {
@@ -24,7 +23,6 @@ export interface SupplierResponseRealizer {
 
 function realizationRequest(
   result: SupplierSimulatorResponse,
-  latestCallerQuestion: string | undefined,
 ): SupplierResponseRealizationRequest {
   return {
     intent: result.intent,
@@ -38,7 +36,6 @@ function realizationRequest(
     offerValidUntil: result.quote.offerValidUntil,
     commercialTermsChanged: result.quote.commercialTermsChanged,
     commercialTermsSummary: result.quote.commercialTermsSummary,
-    latestCallerQuestion: latestCallerQuestion?.trim() ?? "",
   };
 }
 
@@ -86,14 +83,11 @@ function httpStatusCode(error: unknown): number | undefined {
 export async function realizeSupplierResponse(
   realizer: SupplierResponseRealizer,
   result: SupplierSimulatorResponse,
-  latestCallerQuestion: string | undefined,
 ): Promise<string> {
   const startedAt = Date.now();
 
   try {
-    const message = await realizer.realize(
-      realizationRequest(result, latestCallerQuestion),
-    );
+    const message = await realizer.realize(realizationRequest(result));
     if (typeof message !== "string" || message.trim().length === 0) {
       const emptyResponse = new Error("BEDROCK_EMPTY_RESPONSE");
       emptyResponse.name = "BedrockEmptyResponseError";

@@ -160,6 +160,12 @@ export function LiveQualificationPanel() {
         This places one real CALL-E call to StockGuard&apos;s fixed synthetic supplier number.
         The page cannot choose another number, supplier, SKU or quantity, and it never receives the CALL-E API key.
       </p>
+      <p className="mt-2 max-w-2xl text-sm leading-relaxed text-ground-500">
+        The demo supplier deliberately changes payment terms during the call.
+        A successful run ends in <span className="font-medium text-ground-300">HUMAN_ESCALATION_REQUIRED</span> — the
+        Policy Gateway detects the changed terms and holds the order for a human. That outcome is the
+        qualification, not a failure.
+      </p>
 
       <div className="mt-5 grid gap-4 sm:grid-cols-2">
         <label className="block">
