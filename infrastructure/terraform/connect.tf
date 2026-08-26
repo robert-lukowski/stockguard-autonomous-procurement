@@ -102,7 +102,9 @@ resource "aws_connect_contact_flow" "supplier_simulator" {
         Identifier = "supplier-greeting"
         Type       = "MessageParticipant"
         Parameters = {
-          Text = "Ridgeline Industrial Supply, sales desk. How can I help you today?"
+          # Previous longer greeting kept here only as context for the live
+          # turn-taking fix: Ridgeline Industrial Supply, sales desk. How can I help you today?
+          Text = "Ridgeline Industrial Supply."
         }
         Transitions = {
           NextAction = "lex-primary"
@@ -116,10 +118,15 @@ resource "aws_connect_contact_flow" "supplier_simulator" {
         Type       = "ConnectParticipantWithLexBot"
         Parameters = {
           LexV2Bot = { AliasArn = local.lex_bot_alias_arn }
-          # Connect requires Get customer input to carry a prompt. Keep the
-          # full supplier greeting in the preceding non-interruptible action;
-          # this is only the short handoff into the Lex listening turn.
-          Text = "Please go ahead."
+          # Keep the supplier side from being cut off while Lex is speaking a
+          # realized response. CALL-E may still detect normal pauses, but its
+          # audio cannot barge into the active Lex prompt.
+          LexSessionAttributes = {
+            "x-amz-lex:allow-interrupt:*:*" = "false"
+          }
+          # Connect still carries a very short prompt while it opens the Lex
+          # listening turn. Previous prompt: Text = "Please go ahead."
+          Text = "Go ahead."
         }
         Transitions = {
           # Default: any Lex result other than the bot's own FallbackIntent
@@ -153,10 +160,14 @@ resource "aws_connect_contact_flow" "supplier_simulator" {
         Type       = "ConnectParticipantWithLexBot"
         Parameters = {
           LexV2Bot = { AliasArn = local.lex_bot_alias_arn }
+          LexSessionAttributes = {
+            "x-amz-lex:allow-interrupt:*:*" = "false"
+          }
           # Deliberately does not presume a question was already asked: the
           # FallbackIntent that lands here may fire before the caller has
-          # completed their first procurement question.
-          Text = "Sorry, I didn't catch that clearly. Please go ahead."
+          # completed their first procurement question. Previous wording:
+          # Sorry, I didn't catch that clearly. Please go ahead.
+          Text = "Sorry, could you repeat that?"
         }
         Transitions = {
           # No intent branching here: a second FallbackIntent has nowhere to
