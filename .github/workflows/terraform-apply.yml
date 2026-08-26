@@ -4,21 +4,6 @@ run-name: Terraform APPLY · requested by ${{ github.actor }}
 
 on:
   workflow_dispatch:
-    inputs:
-      confirm:
-        description: 'Type APPLY to confirm you intend to change AWS resources'
-        required: true
-        type: string
-      simulator_enabled:
-        description: 'Keep the synthetic supplier armed so it can answer qualification calls'
-        required: false
-        default: true
-        type: boolean
-      enable_call_recording:
-        description: 'Include existing Connect automated-interaction recording in the reviewed plan'
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -43,19 +28,10 @@ jobs:
       TF_VAR_aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
       TF_VAR_connect_instance_id: ${{ secrets.AWS_CONNECT_INSTANCE_ID }}
       TF_VAR_aws_region: ${{ vars.AWS_REGION }}
-      TF_VAR_simulator_enabled: ${{ inputs.simulator_enabled }}
-      TF_VAR_enable_call_recording: ${{ inputs.enable_call_recording }}
+      TF_VAR_simulator_enabled: "true"
+      TF_VAR_enable_call_recording: "true"
 
     steps:
-      - name: Verify explicit confirmation
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "${{ inputs.confirm }}" = "APPLY" || {
-            echo "::error::Confirmation input must be exactly APPLY"
-            exit 1
-          }
-
       - name: Enforce main branch and repository identity
         shell: bash
         run: |
@@ -131,8 +107,8 @@ jobs:
         env:
           AWS_REGION: ${{ vars.AWS_REGION }}
           INSTANCE_ID: ${{ secrets.AWS_CONNECT_INSTANCE_ID }}
-          SIMULATOR: ${{ inputs.simulator_enabled }}
-          RECORDING: ${{ inputs.enable_call_recording }}
+          SIMULATOR: "true"
+          RECORDING: "true"
         run: |
           set -euo pipefail
           terraform output -json > tf-outputs.json
@@ -149,8 +125,8 @@ jobs:
           {
             echo '### Terraform apply completed'
             echo ''
-            echo "simulator_enabled: \`${{ inputs.simulator_enabled }}\`"
-            echo "enable_call_recording: \`${{ inputs.enable_call_recording }}\`"
+            echo 'simulator_enabled: `true`'
+            echo 'enable_call_recording: `true`'
             echo ''
             echo 'Apply used the exact saved tfplan produced in this job.'
           } >> "$GITHUB_STEP_SUMMARY"
