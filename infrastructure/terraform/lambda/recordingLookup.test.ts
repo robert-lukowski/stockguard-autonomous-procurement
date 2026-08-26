@@ -46,11 +46,26 @@ describe("recording lookup", () => {
       parseRecordingLookupReference(
         {
           recordingWorkflowId: reference.workflowId,
-          startedAt: "2026-08-25T11:54:59.000Z",
+          startedAt: "2026-08-25T11:49:59.000Z",
         },
         now,
       ),
     ).toThrow("Invalid recording lookup request");
+  });
+
+  it("accepts a recording lookup reference within the extended fifteen-minute window", () => {
+    expect(
+      parseRecordingLookupReference(
+        {
+          recordingWorkflowId: reference.workflowId,
+          startedAt: "2026-08-25T11:50:01.000Z",
+        },
+        now,
+      ),
+    ).toEqual({
+      workflowId: reference.workflowId,
+      startedAt: "2026-08-25T11:50:01.000Z",
+    });
   });
 
   it("treats an absent recent recording as processing", async () => {
