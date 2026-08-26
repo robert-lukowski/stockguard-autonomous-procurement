@@ -16,6 +16,7 @@ export type {
   SupplierSimulatorLambdaGuard,
 } from "./lexV2";
 export type {
+  SupplierConversationTurn,
   SupplierResponseRealizationRequest,
   SupplierResponseRealizer,
 } from "./SupplierResponseRealizer";
