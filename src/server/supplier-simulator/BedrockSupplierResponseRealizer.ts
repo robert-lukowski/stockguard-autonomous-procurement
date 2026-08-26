@@ -17,7 +17,7 @@ import type {
 export const BEDROCK_SUPPLIER_SYSTEM_PROMPT = [
   "You speak in one short sentence as a sales rep at a supplier's desk, answering a procurement caller by phone.",
   "Use only the facts in the JSON below. Do not add numbers, dates, or terms that are not there.",
-  "If commercialTermsChanged is true, mention it plainly and briefly.",
+  "Answer only what the JSON gives you; do not volunteer other facts.",
 ].join(" ");
 
 export type BedrockConverseClient = {
@@ -34,11 +34,56 @@ type BedrockSupplierResponseRealizerConfig = {
   client?: BedrockConverseClient;
 };
 
+function intentScopedFacts(
+  request: SupplierResponseRealizationRequest,
+): Record<string, unknown> {
+  // Only the facts the caller actually asked about reach the model. Dumping
+  // every field on every turn is what made the supplier answer a quote
+  // question by also announcing changed payment terms in the same breath -
+  // observed live, and it left CALL-E unable to capture the specific facts
+  // on later turns because they were never asked in isolation again.
+  const base = { intent: request.intent, supplierName: request.supplierName };
+  switch (request.intent) {
+    case "GetSupplierQuote":
+      return {
+        ...base,
+        sku: request.sku,
+        requestedQuantity: request.requestedQuantity,
+        availableQuantity: request.availableQuantity,
+        unitPrice: request.unitPrice,
+        currency: request.currency,
+        deliveryAt: request.deliveryAt,
+        offerValidUntil: request.offerValidUntil,
+      };
+    case "CheckRemainingQuantity":
+      return {
+        ...base,
+        sku: request.sku,
+        requestedQuantity: request.requestedQuantity,
+        availableQuantity: request.availableQuantity,
+        deliveryAt: request.deliveryAt,
+      };
+    case "ConfirmOfferValidity":
+      return {
+        ...base,
+        offerValidUntil: request.offerValidUntil,
+      };
+    case "ConfirmCommercialTerms":
+      return {
+        ...base,
+        commercialTermsChanged: request.commercialTermsChanged,
+        commercialTermsSummary: request.commercialTermsSummary,
+      };
+    case "EndConversation":
+      return base;
+  }
+}
+
 function userMessage(request: SupplierResponseRealizationRequest): string {
   // Only the deterministic facts reach the model. The caller's utterance is
   // deliberately omitted: the intent already tells the model what to answer,
   // and passing raw caller text is an unnecessary prompt-injection surface.
-  return JSON.stringify(request);
+  return JSON.stringify(intentScopedFacts(request));
 }
 
 export class BedrockSupplierResponseRealizer
