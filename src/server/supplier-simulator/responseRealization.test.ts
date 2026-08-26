@@ -70,7 +70,7 @@ function handler(
 }
 
 describe("Lex supplier response realization", () => {
-  it("places natural Bedrock text in PlainText while preserving deterministic quote facts", async () => {
+  it("passes the caller utterance and all supplier facts to Bedrock", async () => {
     const realize = vi.fn().mockResolvedValue(
       "Sure. We have all eight CF-220 units available at 41 EUR each.",
     );
@@ -106,23 +106,75 @@ describe("Lex supplier response realization", () => {
       offerValidUntil: expect.stringContaining("2026-09-24"),
       commercialTermsChanged: true,
       commercialTermsSummary: "Payment terms changed from net 30 to advance payment.",
+      conversation: [
+        { role: "caller", text: "Can you confirm the quote?" },
+      ],
     }));
-    // The caller's raw utterance is deliberately not forwarded to the
-    // realizer: the intent is enough to decide what to answer, and
-    // avoiding it removes a prompt-injection surface.
-    expect(realize.mock.calls[0][0]).not.toHaveProperty("latestCallerQuestion");
+    expect(JSON.parse(response.sessionState.sessionAttributes.conversationHistory)).toEqual([
+      { role: "caller", text: "Can you confirm the quote?" },
+      {
+        role: "supplier",
+        text: "Sure. We have all eight CF-220 units available at 41 EUR each.",
+      },
+    ]);
   });
 
-  it("keeps EndConversation fulfilled and closed", async () => {
+  it("keeps the complete conversation across multiple turns", async () => {
+    const realize = vi.fn()
+      .mockResolvedValueOnce("Yes, all eight are available at 41 EUR each.")
+      .mockResolvedValueOnce("Delivery is September 29, the quote is valid until September 24, and payment is now in advance.");
+    const supplier = handler({ realize });
+
+    const first = await supplier(event("GetSupplierQuote", {
+      inputTranscript: "Do you have eight CF 220 units and what is the price?",
+    }));
+    const second = await supplier(event("ConfirmCommercialTerms", {
+      inputTranscript: "What about delivery, validity and payment terms?",
+      sessionState: {
+        sessionAttributes: first.sessionState.sessionAttributes,
+        intent: { name: "ConfirmCommercialTerms" },
+      },
+    }));
+
+    expect(realize).toHaveBeenCalledTimes(2);
+    expect(realize.mock.calls[1][0].conversation).toEqual([
+      { role: "caller", text: "Do you have eight CF 220 units and what is the price?" },
+      { role: "supplier", text: "Yes, all eight are available at 41 EUR each." },
+      { role: "caller", text: "What about delivery, validity and payment terms?" },
+    ]);
+    expect(JSON.parse(second.sessionState.sessionAttributes.conversationHistory)).toEqual([
+      { role: "caller", text: "Do you have eight CF 220 units and what is the price?" },
+      { role: "supplier", text: "Yes, all eight are available at 41 EUR each." },
+      { role: "caller", text: "What about delivery, validity and payment terms?" },
+      {
+        role: "supplier",
+        text: "Delivery is September 29, the quote is valid until September 24, and payment is now in advance.",
+      },
+    ]);
+  });
+
+  it("keeps EndConversation fulfilled and closed while preserving context", async () => {
     const response = await handler({
       realize: vi.fn().mockResolvedValue("Thank you for calling. Goodbye."),
-    })(event("EndConversation"));
+    })(event("EndConversation", {
+      inputTranscript: "Thanks, that is all I needed.",
+      sessionState: {
+        sessionAttributes: {
+          conversationHistory: JSON.stringify([
+            { role: "caller", text: "Do you have the item?" },
+            { role: "supplier", text: "Yes, we do." },
+          ]),
+        },
+        intent: { name: "EndConversation" },
+      },
+    }));
 
     expect(response.sessionState.dialogAction.type).toBe("Close");
     expect(response.sessionState.intent).toEqual({
       name: "EndConversation",
       state: "Fulfilled",
     });
+    expect(JSON.parse(response.sessionState.sessionAttributes.conversationHistory)).toHaveLength(4);
   });
 
   it("does not call Bedrock on guard failures", async () => {

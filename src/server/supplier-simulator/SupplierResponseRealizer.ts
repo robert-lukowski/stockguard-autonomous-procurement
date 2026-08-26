@@ -3,6 +3,11 @@ import type {
   SupplierSimulatorIntent,
 } from "./types";
 
+export type SupplierConversationTurn = {
+  role: "caller" | "supplier";
+  text: string;
+};
+
 export type SupplierResponseRealizationRequest = {
   intent: SupplierSimulatorIntent;
   supplierName: string;
@@ -15,6 +20,7 @@ export type SupplierResponseRealizationRequest = {
   offerValidUntil: string;
   commercialTermsChanged: boolean;
   commercialTermsSummary: string;
+  conversation: SupplierConversationTurn[];
 };
 
 export interface SupplierResponseRealizer {
@@ -23,6 +29,7 @@ export interface SupplierResponseRealizer {
 
 function realizationRequest(
   result: SupplierSimulatorResponse,
+  conversation: SupplierConversationTurn[],
 ): SupplierResponseRealizationRequest {
   return {
     intent: result.intent,
@@ -36,6 +43,7 @@ function realizationRequest(
     offerValidUntil: result.quote.offerValidUntil,
     commercialTermsChanged: result.quote.commercialTermsChanged,
     commercialTermsSummary: result.quote.commercialTermsSummary,
+    conversation: structuredClone(conversation),
   };
 }
 
@@ -83,11 +91,12 @@ function httpStatusCode(error: unknown): number | undefined {
 export async function realizeSupplierResponse(
   realizer: SupplierResponseRealizer,
   result: SupplierSimulatorResponse,
+  conversation: SupplierConversationTurn[] = [],
 ): Promise<string> {
   const startedAt = Date.now();
 
   try {
-    const message = await realizer.realize(realizationRequest(result));
+    const message = await realizer.realize(realizationRequest(result, conversation));
     if (typeof message !== "string" || message.trim().length === 0) {
       const emptyResponse = new Error("BEDROCK_EMPTY_RESPONSE");
       emptyResponse.name = "BedrockEmptyResponseError";
