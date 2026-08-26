@@ -62,7 +62,6 @@ describe("MockCallEAdapter", () => {
 
   it("blocks a number outside the approved allowlist", async () => {
     const adapter = new MockCallEAdapter();
-
     await expect(
       adapter.startSupplierCall(
         { ...request, phoneE164: "+15550100002" },
@@ -73,7 +72,6 @@ describe("MockCallEAdapter", () => {
 
   it("blocks a recipient without verified consent", async () => {
     const adapter = new MockCallEAdapter();
-
     await expect(
       adapter.startSupplierCall(
         { ...request, consentVerified: false },
@@ -91,9 +89,7 @@ describe("CallEApiAdapter", () => {
       fetchImplementation: vi.fn(),
     });
 
-    await expect(
-      adapter.startSupplierCall(request, authorization),
-    ).rejects.toEqual(
+    await expect(adapter.startSupplierCall(request, authorization)).rejects.toEqual(
       new CallSafetyError("Real CALL-E calls are disabled", "REAL_CALLS_DISABLED"),
     );
   });
@@ -101,15 +97,10 @@ describe("CallEApiAdapter", () => {
   it("uses the approved locale and structured schema when enabled", async () => {
     const fetchImplementation = vi.fn().mockResolvedValue(
       new Response(
-        JSON.stringify({
-          call_id: "call-test-01",
-          status: "queued",
-          task_completed: false,
-        }),
+        JSON.stringify({ call_id: "call-test-01", status: "queued", task_completed: false }),
         { status: 200 },
       ),
     );
-
     const adapter = new CallEApiAdapter({
       apiKey: "test-only",
       realCallsEnabled: true,
@@ -120,7 +111,6 @@ describe("CallEApiAdapter", () => {
 
     const [, options] = fetchImplementation.mock.calls[0];
     const body = JSON.parse(options.body as string);
-
     expect(body.recipients[0]).toEqual({
       phones: [request.phoneE164],
       region: "DE",
@@ -148,9 +138,7 @@ describe("CallEApiAdapter", () => {
     const fetchImplementation = vi.fn(
       (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
         const signal = init?.signal;
-        if (!(signal instanceof AbortSignal)) {
-          throw new Error("Expected an AbortSignal");
-        }
+        if (!(signal instanceof AbortSignal)) throw new Error("Expected an AbortSignal");
         signals.push(signal);
         if (signals.length === 1) {
           return Promise.resolve(
@@ -174,10 +162,7 @@ describe("CallEApiAdapter", () => {
     });
 
     const created = await adapter.startSupplierCall(request, authorization);
-    await expect(adapter.getSupplierCall(created.callId)).rejects.toThrow(
-      "CALL_TIMEOUT",
-    );
-
+    await expect(adapter.getSupplierCall(created.callId)).rejects.toThrow("CALL_TIMEOUT");
     expect(signals).toHaveLength(2);
     expect(signals[0].aborted).toBe(false);
     expect(signals[1].aborted).toBe(true);
@@ -196,10 +181,7 @@ describe("CallEApiAdapter", () => {
       fetchImplementation,
     });
 
-    await expect(
-      adapter.startSupplierCall(request, authorization),
-    ).rejects.toThrow("HTTP 503");
-
+    await expect(adapter.startSupplierCall(request, authorization)).rejects.toThrow("HTTP 503");
     const warned = vi.mocked(console.warn).mock.calls.flat().join(" ");
     expect(warned).toContain("CALLE_HTTP_NON_2XX");
     expect(warned).toContain('"httpStatus":503');
@@ -217,7 +199,6 @@ describe("CallEApiAdapter", () => {
     });
 
     await adapter.getSupplierCall("call-terminal");
-
     const logged = vi.mocked(console.log).mock.calls.flat().join(" ");
     expect(logged).toContain("CALLE_TERMINAL_STATUS");
     expect(logged).toContain("call-terminal");
@@ -226,10 +207,7 @@ describe("CallEApiAdapter", () => {
 
   it("routes an allowlisted synthetic RFQ through the configured Connect number", async () => {
     const fetchImplementation = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({ call_id: "call-simulator-01", status: "queued" }),
-        { status: 200 },
-      ),
+      new Response(JSON.stringify({ call_id: "call-simulator-01", status: "queued" })),
     );
     const syntheticRequest: SupplierCallRequest = {
       ...request,
@@ -254,7 +232,6 @@ describe("CallEApiAdapter", () => {
     });
 
     await adapter.startSupplierCall(syntheticRequest, authorization);
-
     const [, options] = fetchImplementation.mock.calls[0];
     const body = JSON.parse(options.body as string);
     expect(body.recipients[0].region).toBe("US");
@@ -268,12 +245,9 @@ describe("CallEApiAdapter", () => {
     });
   });
 
-  it("skips the routing-code prompt for the fixed English qualification endpoint", async () => {
+  it("uses a natural spoken prompt for the fixed English qualification endpoint", async () => {
     const fetchImplementation = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({ call_id: "call-en-qualification", status: "queued" }),
-        { status: 200 },
-      ),
+      new Response(JSON.stringify({ call_id: "call-en-qualification", status: "queued" })),
     );
     const syntheticRequest: SupplierCallRequest = {
       ...request,
@@ -281,6 +255,7 @@ describe("CallEApiAdapter", () => {
       supplierName: "Ridgeline Industrial Supply",
       locale: "en-US",
       region: "US",
+      requiredBy: "2026-09-30T12:00:00+02:00",
       syntheticRouting: {
         kind: "SYNTHETIC_SUPPLIER_SIMULATOR",
         rfqId: "RFQ-EN-QUALIFICATION",
@@ -308,66 +283,42 @@ describe("CallEApiAdapter", () => {
     });
 
     await adapter.startSupplierCall(syntheticRequest, syntheticAuthorization);
-
     const [, options] = fetchImplementation.mock.calls[0];
     const body = JSON.parse(options.body as string);
 
-    // The fixed-qualification prompt is intentionally minimal. It states the
-    // goal, the safety boundary, and lets CALL-E speak naturally. Every
-    // previous "do not X" here was a workaround for a downstream sharp edge,
-    // not a real guardrail on the model.
-
-    // Goal: the essential business context reaches CALL-E in one place.
     expect(body.task).toContain(
-      "Call the approved supplier Ridgeline Industrial Supply about a purchase qualification for 8 units of CF-220",
+      "Ridgeline Industrial Supply about a purchase qualification for 8 units of product CF 220 needed by September 30, 2026",
     );
-    expect(body.task).toContain(request.requiredBy);
+    expect(body.task).toContain("supplier will greet you first");
+    expect(body.task).toContain("Let the greeting finish before you respond");
     expect(body.task).toContain("AI procurement assistant from StockGuard");
     expect(body.task).toContain("information only, so no order will be placed");
     expect(body.task).toContain("Have a natural conversation");
-    // The six commercial facts the workflow needs (in natural prose, not a
-    // schema recital).
     expect(body.task).toContain("availability");
+    expect(body.task).toContain("available quantity");
     expect(body.task).toContain("unit price");
     expect(body.task).toContain("currency");
     expect(body.task).toContain("delivery date");
     expect(body.task).toContain("quote validity");
     expect(body.task).toContain("payment terms");
+    expect(body.task).toContain("do not force a scripted order");
     expect(body.task).toContain("Speak en-US");
-    // Safety boundaries that ARE genuine model constraints, not tone
-    // policing.
-    expect(body.task).toContain(
-      "Do not collect payment data, credentials, access codes",
-    );
+    expect(body.task).toContain("Do not collect payment data, credentials, access codes");
     expect(body.task).toContain("recipient opts out");
 
-    // Safety: no leak of any internal identifier into what CALL-E may speak.
+    expect(body.task).not.toContain("CF-220");
+    expect(body.task).not.toContain("2026-09-30T12:00:00+02:00");
     expect(body.task).not.toContain("routing code 0 0 0 0 0 1");
     expect(body.task).not.toContain("RFQ-EN-QUALIFICATION");
     expect(body.task).not.toContain("EN_SUPPLIER");
     expect(body.task).not.toContain("synthetic-suppliers-2026-08-v1");
     expect(body.task).not.toContain(request.workflowId);
-    expect(body.task).not.toMatch(
-      /fictional test organization|fictional organization|fake company|test harness/i,
-    );
-
-    // Regression fence: rules that we deliberately REMOVED because they were
-    // rule accretion. If any of them come back the prompt is bloating again.
     expect(body.task).not.toContain("Please go ahead");
-    expect(body.task).not.toContain("Do not stop after the disclosure");
-    expect(body.task).not.toContain("Do not say filler acknowledgements");
-    expect(body.task).not.toContain("health-check questions");
-    expect(body.task).not.toContain("Do not reconfirm");
-    expect(body.task).not.toContain("Do not ask for supplier references");
-    expect(body.task).not.toContain("Do not ask open-ended closing");
+    expect(body.task).not.toContain("one continuous turn");
+    expect(body.task).not.toContain("one question at a time");
     expect(body.task).not.toContain("Track which qualification fields");
-    expect(body.task).not.toContain("Never describe capitalization");
+    expect(body.task.length).toBeLessThan(900);
 
-    // Length ceiling: the fixed-qualification prompt should stay short.
-    // 800 chars leaves room for the required_by timestamp and future
-    // legitimate safety additions without opening the door to another
-    // accretion round.
-    expect(body.task.length).toBeLessThan(800);
     expect(body.metadata).toMatchObject({
       workflow_run_id: request.workflowId,
       synthetic_rfq_id: "RFQ-EN-QUALIFICATION",
@@ -440,7 +391,6 @@ describe("CallEApiAdapter", () => {
     });
 
     const result = await adapter.startSupplierCall(request, authorization);
-
     expect(result.schemaValidation.valid).toBe(false);
     expect(result.structuredResult).toBeNull();
     expect(result.schemaValidation.issues.map(({ field }) => field)).toEqual(
