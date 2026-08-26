@@ -7,7 +7,7 @@ import {
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 export const RECORDING_CLOCK_SKEW_MS = 10_000;
-export const RECORDING_LOOKUP_MAX_AGE_MS = 10 * 60_000;
+export const RECORDING_LOOKUP_MAX_AGE_MS = 15 * 60_000;
 export const MIN_RECORDING_URL_TTL_SECONDS = 120;
 export const MAX_RECORDING_URL_TTL_SECONDS = 300;
 
