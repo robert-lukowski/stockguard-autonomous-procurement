@@ -246,12 +246,12 @@ export class CallEApiAdapter implements SupplierCallingPort {
     if (fixedQualification) {
       task = [
         `Call the approved supplier ${request.supplierName} about a purchase qualification for ${request.requestedQuantity} units of ${request.sku} needed by ${request.requiredBy}.`,
-        "Introduce yourself as an AI procurement assistant from StockGuard and make clear the call is for information only, so no order will be placed.",
-        "Have a natural conversation with the supplier and confirm availability, unit price, currency, delivery date, quote validity, and whether the standard payment terms still apply.",
+        "Introduce yourself as an AI procurement assistant from StockGuard. Make clear this is for information only, so no order will be placed.",
+        "Have a natural conversation with the supplier. Gather facts progressively with follow-up questions as needed, not all in one question: availability, available quantity, unit price, currency, delivery date, quote validity, and payment terms.",
         `Speak ${request.locale}.`,
         "Do not collect payment data, credentials, access codes, or unrelated personal information.",
-        "If the recipient opts out, stop the conversation and record the opt-out.",
-        "End the call once you have the information you need.",
+        "If the recipient opts out, stop and record the opt-out.",
+        "End the call once the required information is confirmed.",
       ].join(" ");
     } else {
       const routingLines = syntheticRouting
