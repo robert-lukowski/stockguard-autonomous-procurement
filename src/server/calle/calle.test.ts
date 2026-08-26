@@ -311,56 +311,63 @@ describe("CallEApiAdapter", () => {
 
     const [, options] = fetchImplementation.mock.calls[0];
     const body = JSON.parse(options.body as string);
+
+    // The fixed-qualification prompt is intentionally minimal. It states the
+    // goal, the safety boundary, and lets CALL-E speak naturally. Every
+    // previous "do not X" here was a workaround for a downstream sharp edge,
+    // not a real guardrail on the model.
+
+    // Goal: the essential business context reaches CALL-E in one place.
+    expect(body.task).toContain(
+      "Call the approved supplier Ridgeline Industrial Supply about a purchase qualification for 8 units of CF-220",
+    );
+    expect(body.task).toContain(request.requiredBy);
+    expect(body.task).toContain("AI procurement assistant from StockGuard");
+    expect(body.task).toContain("information only, so no order will be placed");
+    expect(body.task).toContain("Have a natural conversation");
+    // The six commercial facts the workflow needs (in natural prose, not a
+    // schema recital).
+    expect(body.task).toContain("availability");
+    expect(body.task).toContain("unit price");
+    expect(body.task).toContain("currency");
+    expect(body.task).toContain("delivery date");
+    expect(body.task).toContain("quote validity");
+    expect(body.task).toContain("payment terms");
+    expect(body.task).toContain("Speak en-US");
+    // Safety boundaries that ARE genuine model constraints, not tone
+    // policing.
+    expect(body.task).toContain(
+      "Do not collect payment data, credentials, access codes",
+    );
+    expect(body.task).toContain("recipient opts out");
+
+    // Safety: no leak of any internal identifier into what CALL-E may speak.
     expect(body.task).not.toContain("routing code 0 0 0 0 0 1");
-    expect(body.task).not.toMatch(
-      /fictional test organization|fictional organization|fake company|test harness/i,
-    );
-    expect(body.task).toContain("calling on behalf of StockGuard");
-    expect(body.task).toContain(
-      "The automated supplier speaks first",
-    );
-    expect(body.task).toContain(
-      "Wait until that opening greeting has fully finished before you speak",
-    );
-    expect(body.task).toContain(
-      "Do not require or wait for any specific exact phrase",
-    );
-    expect(body.task).toContain(
-      "Do not interrupt or talk over the supplier",
-    );
-    expect(body.task).not.toContain("exact phrase 'Please go ahead.'");
-    expect(body.task).toContain("already pinned to the English qualification profile");
-    expect(body.task).toContain(
-      "naturally ask about availability for 8 units of CF-220",
-    );
-    expect(body.task).toContain(
-      "Once the automated supplier's opening greeting has fully finished, begin one continuous first turn that combines the required disclosure and the first concrete procurement question for 8 units of CF-220",
-    );
-    expect(body.task).toContain(
-      "Do not stop after the disclosure or yield the turn before asking that concrete procurement question",
-    );
-    expect(body.task).toContain(
-      "Do not say filler acknowledgements such as 'I'm here' after the disclosure",
-    );
-    expect(body.task).toContain(
-      "Refer to the requested product code naturally as 'CF-220'",
-    );
-    expect(body.task).toContain(
-      "Never describe capitalization, punctuation, hyphens, or identifier formatting",
-    );
-    expect(body.task).toContain(
-      "Once all required qualification facts are known, thank the recipient, say goodbye, and end the call",
-    );
-    expect(body.task).toContain("Do not ask open-ended closing questions");
-    expect(body.task).toContain("Do not ask for supplier references, quote references");
-    expect(body.task).toContain("Do not reconfirm facts already clearly stated");
-    expect(body.task).toContain("Do not use health-check questions");
-    expect(body.task).toContain("rephrase the current question once");
-    expect(body.task).toContain("Track which qualification fields have already been explicitly confirmed");
     expect(body.task).not.toContain("RFQ-EN-QUALIFICATION");
     expect(body.task).not.toContain("EN_SUPPLIER");
     expect(body.task).not.toContain("synthetic-suppliers-2026-08-v1");
     expect(body.task).not.toContain(request.workflowId);
+    expect(body.task).not.toMatch(
+      /fictional test organization|fictional organization|fake company|test harness/i,
+    );
+
+    // Regression fence: rules that we deliberately REMOVED because they were
+    // rule accretion. If any of them come back the prompt is bloating again.
+    expect(body.task).not.toContain("Please go ahead");
+    expect(body.task).not.toContain("Do not stop after the disclosure");
+    expect(body.task).not.toContain("Do not say filler acknowledgements");
+    expect(body.task).not.toContain("health-check questions");
+    expect(body.task).not.toContain("Do not reconfirm");
+    expect(body.task).not.toContain("Do not ask for supplier references");
+    expect(body.task).not.toContain("Do not ask open-ended closing");
+    expect(body.task).not.toContain("Track which qualification fields");
+    expect(body.task).not.toContain("Never describe capitalization");
+
+    // Length ceiling: the fixed-qualification prompt should stay short.
+    // 800 chars leaves room for the required_by timestamp and future
+    // legitimate safety additions without opening the door to another
+    // accretion round.
+    expect(body.task.length).toBeLessThan(800);
     expect(body.metadata).toMatchObject({
       workflow_run_id: request.workflowId,
       synthetic_rfq_id: "RFQ-EN-QUALIFICATION",

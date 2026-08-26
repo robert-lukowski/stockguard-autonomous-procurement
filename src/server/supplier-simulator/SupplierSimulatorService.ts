@@ -128,14 +128,22 @@ function localizedMessage(
         : "Les conditions commerciales standard approuvées restent inchangées.",
       EndConversation: "La réponse synthétique à la demande est terminée.",
     },
+    // English messages are deliberately terse: they exist as the Bedrock
+    // realizer's DETERMINISTIC FALLBACK, not as the primary supplier voice.
+    // Any narrative wording here would either double up on a working
+    // Bedrock response or, when Bedrock fails, ship a full scripted
+    // sentence that looks nothing like the natural version and hides the
+    // failure. Reading facts in a data-list voice is intentional: it is
+    // obviously a fallback, contains every fact the caller needs, and
+    // leaves the Bedrock realizer room to sound human.
     en_US: {
-      GetSupplierQuote: `Thanks for calling ${quote.supplierName}. Let me check that for you. Yes, I can confirm ${values.quantity} units of ${quote.sku} are available at ${values.englishPrice} ${values.currency} per unit, with delivery on ${values.englishDelivery}. The quote is valid until ${values.englishValidUntil}.`,
-      CheckRemainingQuantity: `The remaining ${values.remaining} units can be delivered on ${values.remainderDelivery}.`,
-      ConfirmOfferValidity: `The quote is valid until ${values.validUntil}.`,
+      GetSupplierQuote: `${values.quantity} units of ${quote.sku} available. ${values.englishPrice} ${values.currency} per unit. Delivery ${values.englishDelivery}. Quote valid until ${values.englishValidUntil}.`,
+      CheckRemainingQuantity: `Remaining ${values.remaining} units. Delivery ${values.remainderDelivery}.`,
+      ConfirmOfferValidity: `Quote valid until ${values.englishValidUntil}.`,
       ConfirmCommercialTerms: quote.commercialTermsChanged
-        ? "There is one change I should mention. Our payment terms have changed from net 30 days to advance payment."
-        : "The approved standard commercial terms remain unchanged.",
-      EndConversation: `That covers everything from our side. Thank you for calling ${quote.supplierName}.`,
+        ? "Payment terms changed from net 30 days to advance payment."
+        : "Standard payment terms apply.",
+      EndConversation: "Goodbye.",
     },
     pl_PL: {
       GetSupplierQuote: `Dla zapytania ${quote.rfqId} dostępnych jest ${values.quantity} z ${values.requested} sztuk po ${values.price} ${values.currency} za sztukę. Dostawa: ${values.delivery}.`,

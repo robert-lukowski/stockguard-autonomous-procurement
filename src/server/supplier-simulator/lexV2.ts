@@ -233,11 +233,7 @@ export function createSupplierSimulatorLexHandler(
         return failed(event, "PROFILE_LOCALE_MISMATCH");
       }
       const naturalMessage = responseRealizer
-        ? await realizeSupplierResponse(
-            responseRealizer,
-            result,
-            event.inputTranscript,
-          )
+        ? await realizeSupplierResponse(responseRealizer, result)
         : result.message;
       return {
         sessionState: {

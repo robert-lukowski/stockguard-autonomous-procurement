@@ -65,13 +65,13 @@ describe("English synthetic supplier", () => {
     });
 
     expect(first.message).toBe(second.message);
-    expect(first.message).toContain(
-      `Thanks for calling ${first.quote.supplierName}. Let me check that for you.`,
-    );
     expect(first.quote.locale).toBe("en_US");
     expect(first.quote.deterministic).toBe(true);
 
-    // Every spoken offer value comes from the deterministic quote.
+    // The English message is the Bedrock realizer's deterministic fallback,
+    // so it is deliberately terse and data-shaped rather than a scripted
+    // opener. What matters for downstream policy is that every fact the
+    // caller needs is present.
     expect(first.message).not.toContain("${");
     expect(first.message).toContain(String(first.quote.availableQuantity));
     expect(first.message).toContain(first.quote.sku);
@@ -79,6 +79,10 @@ describe("English synthetic supplier", () => {
     expect(first.message).toContain(first.quote.currency);
     expect(first.message).toContain(englishDate(first.quote.deliveryAt));
     expect(first.message).toContain(englishDate(first.quote.offerValidUntil));
+    // The old scripted opener MUST NOT come back - if it does, the
+    // fallback is doing the realizer's job again.
+    expect(first.message).not.toContain("Thanks for calling");
+    expect(first.message).not.toContain("Let me check that for you");
   });
 
   it("interpolates every English intent that carries quote values", async () => {
@@ -98,7 +102,9 @@ describe("English synthetic supplier", () => {
       rfqId: rfq.rfqId,
       profileId: "EN_SUPPLIER",
     });
-    expect(validity.message).toContain(validity.quote.offerValidUntil.slice(0, 10));
+    // The English fallback formats the validity date in long form; other
+    // locales still use the ISO date prefix.
+    expect(validity.message).toContain(englishDate(validity.quote.offerValidUntil));
   });
 
   it("states the changed commercial terms in English", async () => {
@@ -109,21 +115,23 @@ describe("English synthetic supplier", () => {
     });
 
     expect(response.quote.commercialTermsChanged).toBe(true);
+    // Terse fallback wording; the Bedrock realizer produces the natural
+    // version. Both must carry the same fact: net 30 → advance payment.
     expect(response.message).toBe(
-      "There is one change I should mention. Our payment terms have changed from net 30 days to advance payment.",
+      "Payment terms changed from net 30 days to advance payment.",
     );
   });
 
-  it("ends the English conversation naturally", async () => {
+  it("ends the English conversation", async () => {
     const response = await service().respond({
       intent: "EndConversation",
       rfqId: rfq.rfqId,
       profileId: "EN_SUPPLIER",
     });
 
-    expect(response.message).toBe(
-      `That covers everything from our side. Thank you for calling ${response.quote.supplierName}.`,
-    );
+    // Terse fallback: a single word is enough. The realizer says something
+    // more natural when Bedrock is available.
+    expect(response.message).toBe("Goodbye.");
     expect(response.continueConversation).toBe(false);
   });
 

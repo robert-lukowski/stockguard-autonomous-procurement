@@ -51,7 +51,10 @@ describe("supplier simulator Lambda composition root", () => {
   it("answers a quote in English without any RFQ in the session", async () => {
     const response = await lexFulfillment(event());
 
-    expect(response.messages[0].content).toContain("8 units of CF-220 are available");
+    // The English fallback message is deliberately terse - the Bedrock
+    // realizer is where narrative wording lives. The fallback still
+    // contains every fact CALL-E needs to make a decision.
+    expect(response.messages[0].content).toContain("8 units of CF-220 available");
     expect(response.sessionState.sessionAttributes.simulatorStatus).toBe("SYNTHETIC");
     expect(response.sessionState.sessionAttributes.supplierProfileId).toBe(
       "EN_SUPPLIER",
