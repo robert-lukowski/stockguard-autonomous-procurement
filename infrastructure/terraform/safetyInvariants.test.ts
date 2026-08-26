@@ -357,9 +357,11 @@ describe("Terraform workflow invariants", () => {
     }
   });
 
-  it("requires explicit APPLY confirmation on main", () => {
-    expect(apply).toContain('inputs.confirm }}" = "APPLY"');
+  it("keeps manual apply limited to main and the expected repository", () => {
     expect(apply).toContain('test "$GITHUB_REF" = "refs/heads/main"');
+    expect(apply).toContain('test "$GITHUB_REPOSITORY_ID" = "1341560793"');
+    expect(apply).toContain('test "$GITHUB_REPOSITORY_OWNER_ID" = "207513888"');
+    expect(apply).not.toContain("inputs.confirm");
   });
 
   it("keeps the apply job behind the aws-qualification environment", () => {
@@ -398,17 +400,27 @@ describe("Terraform workflow invariants", () => {
     }
   });
 
-  it("uses the same recording input in plan and apply", () => {
-    for (const workflow of [plan, apply]) {
-      expect(workflow).toContain("simulator_enabled:");
-      expect(workflow).toMatch(
-        /enable_call_recording:[\s\S]*?description: 'Include existing Connect automated-interaction recording in the reviewed plan'[\s\S]*?default: false[\s\S]*?TF_VAR_enable_call_recording: \$\{\{ inputs\.enable_call_recording \}\}/,
-      );
-      expect(workflow).toMatch(
-        /echo "enable_call_recording: \\`\$\{\{ inputs\.enable_call_recording \}\}\\`"/,
-      );
-      expect(workflow).not.toContain("recovery_mode:");
-    }
+  it("keeps recording configurable in the manual plan", () => {
+    expect(plan).toContain("simulator_enabled:");
+    expect(plan).toMatch(
+      /enable_call_recording:[\s\S]*?description: 'Include existing Connect automated-interaction recording in the reviewed plan'[\s\S]*?default: false[\s\S]*?TF_VAR_enable_call_recording: \$\{\{ inputs\.enable_call_recording \}\}/,
+    );
+    expect(plan).toMatch(
+      /echo "enable_call_recording: \\`\$\{\{ inputs\.enable_call_recording \}\}\\`"/,
+    );
+    expect(plan).not.toContain("recovery_mode:");
+  });
+
+  it("keeps the simplified apply runtime enabled without form inputs", () => {
+    expect(apply).toContain('TF_VAR_simulator_enabled: "true"');
+    expect(apply).toContain('TF_VAR_enable_call_recording: "true"');
+    expect(apply).toContain('SIMULATOR: "true"');
+    expect(apply).toContain('RECORDING: "true"');
+    expect(apply).toContain("echo 'simulator_enabled: `true`'");
+    expect(apply).toContain("echo 'enable_call_recording: `true`'");
+    expect(apply).not.toContain("inputs.simulator_enabled");
+    expect(apply).not.toContain("inputs.enable_call_recording");
+    expect(apply).not.toContain("recovery_mode:");
     expect(apply).toContain("--expect-recording \"$RECORDING\"");
   });
 
