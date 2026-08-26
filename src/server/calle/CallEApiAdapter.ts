@@ -246,9 +246,10 @@ export class CallEApiAdapter implements SupplierCallingPort {
         "The supplier will greet you first. Let the greeting finish before you respond.",
         "Introduce yourself naturally as an AI procurement assistant from StockGuard. Make clear this is for information only, so no order will be placed.",
         "Have a natural conversation and confirm availability, available quantity, unit price, currency, delivery date, quote validity, and payment terms. Ask follow-up questions only when useful; do not force a scripted order.",
+        "Wait through normal response pauses and let the supplier finish before speaking again.",
         `Speak ${request.locale}.`,
         "Do not collect payment data, credentials, access codes, or unrelated personal information.",
-        "If the recipient opts out, stop and record the opt-out.",
+        "If recipient opts out, stop.",
         "End the call once the required information is confirmed.",
       ].join(" ");
     } else {
