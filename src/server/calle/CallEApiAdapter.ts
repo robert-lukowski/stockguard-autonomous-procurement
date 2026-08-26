@@ -35,11 +35,6 @@ type CallEApiConfig = {
     allowedProfileIds: Array<
       "DE_SUPPLIER" | "FR_SUPPLIER" | "PL_SUPPLIER" | "EN_SUPPLIER"
     >;
-    /**
-     * Architecture A is already pinned to EN_SUPPLIER in Connect/Lex, so it
-     * has no routing-code prompt. Later multi-profile simulator deployments may
-     * opt back into the routing-code conversation.
-     */
     routingMode?: "routing-code" | "fixed-qualification";
   };
 };
@@ -120,6 +115,21 @@ function mapTask(response: CallETaskSnapshot): SupplierCallTask {
     },
     outcome: taskOutcome(response, validation, transcript),
   };
+}
+
+function spokenSku(sku: string): string {
+  return sku.replace(/-/g, " ");
+}
+
+function spokenDate(value: string): string {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return value;
+  return new Intl.DateTimeFormat("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(date);
 }
 
 export class CallEApiAdapter implements SupplierCallingPort {
@@ -229,25 +239,13 @@ export class CallEApiAdapter implements SupplierCallingPort {
       syntheticRouting &&
       this.config.syntheticSupplierSimulator?.routingMode === "fixed-qualification";
 
-    // Fixed-qualification is the mode Architecture A actually deploys. Its
-    // prompt is deliberately minimal: give CALL-E the goal, the safety
-    // boundary, and the room to have a natural conversation. Every prior
-    // rule accretion here was a workaround for a downstream sharp edge
-    // (one-turn Lex flow, deterministic-message-as-script) rather than a
-    // guardrail CALL-E genuinely needs. Naturalness is the whole point of
-    // a voice agent; policing tone with negative rules costs more than it
-    // buys.
-    //
-    // Architecture B (multi-profile routing) and the approved-supplier path
-    // stay untouched. Neither is deployed against a live call today, and
-    // "harmonising" them without an observation would just be another
-    // guess.
     let task: string;
     if (fixedQualification) {
       task = [
-        `Call the approved supplier ${request.supplierName} about a purchase qualification for ${request.requestedQuantity} units of ${request.sku} needed by ${request.requiredBy}.`,
-        "Introduce yourself as an AI procurement assistant from StockGuard. Make clear this is for information only, so no order will be placed.",
-        "Have a natural conversation with the supplier. Gather facts progressively with follow-up questions as needed, not all in one question: availability, available quantity, unit price, currency, delivery date, quote validity, and payment terms.",
+        `Call the approved supplier ${request.supplierName} about a purchase qualification for ${request.requestedQuantity} units of product ${spokenSku(request.sku)} needed by ${spokenDate(request.requiredBy)}.`,
+        "The supplier will greet you first. Let the greeting finish before you respond.",
+        "Introduce yourself naturally as an AI procurement assistant from StockGuard. Make clear this is for information only, so no order will be placed.",
+        "Have a natural conversation and confirm availability, available quantity, unit price, currency, delivery date, quote validity, and payment terms. Ask follow-up questions only when useful; do not force a scripted order.",
         `Speak ${request.locale}.`,
         "Do not collect payment data, credentials, access codes, or unrelated personal information.",
         "If the recipient opts out, stop and record the opt-out.",
