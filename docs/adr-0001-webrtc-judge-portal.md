@@ -170,12 +170,93 @@ The only provider shipped today is `DisabledVoiceSessionProvider`, which throws.
 The flag is read as an exact `"true"`; `"TRUE"`, `"1"` and `"yes"` all leave it
 off, so a mistyped variable cannot arm a path that starts a billable contact.
 
+## Durable state (added 2026-09-04)
+
+`InMemoryProcurementSessionStore` remains, for local development and tests.
+`DynamoProcurementSessionStore` is the durable implementation of the same
+contract, reusing the conditional-write patterns already proven in
+`src/server/judge/aws/dynamo.ts`.
+
+The store port is granular rather than `save(session)`, because two guarantees
+cannot be expressed as a read-modify-write of one document:
+
+- **a confirmation token is consumed exactly once.** The token IS its own item,
+  created with `attribute_not_exists(PK)`. Two instances cannot both read
+  "unused" and both write.
+- **a run completes exactly once.** Completion is conditional on the outcome
+  still being unset, so a replayed confirmation emits no metrics and cannot
+  inflate the accepted-run count in CloudWatch or Grafana.
+
+Audit sort keys carry the event timestamp plus an index rather than a sequence
+counter. A counter would need its own read-modify-write and could collide; ISO
+timestamps sort lexicographically in the order things happened, and the hash
+chain is built from that order at read time.
+
+Both stores are exercised by **one contract test** (`describe.each` over both
+implementations), against an in-memory DynamoDB double that really evaluates
+condition expressions. That is what stops the two drifting — and it already
+caught one: the in-memory voice store overwrote `consumedAt` on a second
+consume, where the durable one is conditional.
+
+### The table
+
+`var.procurement_table_enabled` defaults to **false**; the Judge Portal MVP runs
+entirely in memory. The table is separate from any Judge Mode table (different
+retention, different blast radius, so a single IAM grant should not cover
+both), carries `deletion_protection_enabled` and `prevent_destroy`, encrypts at
+rest, and enables point-in-time recovery. TTL on `expiresAtEpoch` is cleanup
+only — deletion is best-effort and can lag by hours, so the adapters check
+expiry in code as well.
+
+The IAM policy document is created alongside it but **attached to nothing**: no
+Lambda serves the procurement core yet, and attaching a policy to nothing would
+be misleading. It grants `GetItem`, `Query`, `PutItem` and `UpdateItem` on that
+one table. No `Scan`, no `DeleteItem`, no wildcard.
+
+## The protected WebRTC session contract (added 2026-09-04)
+
+`VoiceSessionService` is the only path from a browser to Amazon Connect, and it
+is why the browser needs no AWS credential: the credential stays in the
+backend's execution role, and what crosses is a projected grant.
+
+Fail-closed on every axis, each with a test:
+
+| Condition | Result |
+|---|---|
+| Judge Mode disabled, or only the shipped disabled port available | `DISABLED` |
+| No authenticated identity | `IDENTITY_MISSING` |
+| Procurement session expired | `SESSION_EXPIRED` |
+| Per-judge ceiling exceeded | `RATE_LIMITED` (checked **before** the upstream call, so a throttled caller costs nothing) |
+| A grant already exists for the session | `GRANT_ALREADY_ISSUED` — and the stored grant is **not** re-issued, which would make a single-use grant replayable |
+| Connect unreachable | `UPSTREAM_UNAVAILABLE` |
+| Connect response missing or reshaped | `UPSTREAM_MALFORMED` |
+
+`judgeId` comes from the authenticated principal and is never read from a
+request body — a caller who could name their own judge id could also reset
+their own rate limit. The browser client sends only `sessionId` and
+`missionId`, and a test asserts the body contains no identity.
+
+`parseConnectWebRtcResponse` projects the `StartWebRTCContact` response field by
+field onto seven values. SDK metadata, `MediaPlacement` and everything else is
+dropped rather than forwarded; `contactId` stays server-side as a correlation
+handle the browser has no use for. A configured grant lifetime longer than the
+declared ceiling is clamped, not honoured.
+
+The per-judge rate limit reuses `DynamoFixedWindowRateLimiter` from the judge
+backend unchanged — it already implements exactly this shape against the same
+conditional-increment pattern.
+
+Still not deployed: no live provider exists, `var.webrtc_judge_mode_enabled`
+defaults to false, and `DisabledConnectWebRtcContactPort` throws.
+
 ## Deferred
 
-- Durable persistence. `InMemoryProcurementSessionStore` is per-process and is
-  documented as such; the DynamoDB conditional-write pattern in
-  `src/server/judge/aws/dynamo.ts` is the intended replacement.
-- The protected backend session endpoint and a real `VoiceSessionProvider`.
+- Deploying the DynamoDB table and wiring a composition root that binds
+  `DynamoProcurementSessionStore` to a real `DynamoDocumentPort` (an AWS SDK v3
+  DocumentClient translation of the four commands).
+- The HTTP endpoint that exposes `VoiceSessionService`, its authentication, and
+  a real `ConnectWebRtcContactPort` calling `StartWebRTCContact`.
+- Joining the Chime SDK meeting in the browser from the projected grant.
 - The Lex bot and Connect flow for the **judge-facing** conversation (the
   existing ones model a supplier, not a buyer).
 - Wiring `EmbeddedMetricFormatSink` into a deployed Lambda, and the Managed

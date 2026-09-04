@@ -144,3 +144,45 @@ variable "live_caller_enabled" {
     Do not set this to true without a durable, cross-invocation spend control.
   EOT
 }
+
+variable "procurement_table_enabled" {
+  type        = bool
+  default     = false
+  description = <<-EOT
+    Creates the DynamoDB table backing durable procurement sessions and WebRTC
+    voice grants.
+
+    Defaults to false because the Judge Portal MVP runs entirely on the
+    in-memory store: the table is only needed once a deployed Lambda serves the
+    procurement core, and creating a stateful resource is a decision rather
+    than a deployment detail.
+
+    The table is safe to create in isolation - it is new, it is never shared
+    with the Judge Mode table, and nothing reads or writes it until a
+    composition root is wired up. It is NOT safe to destroy once it holds live
+    sessions, which is why it carries deletion protection and
+    prevent_destroy.
+  EOT
+}
+
+variable "procurement_table_name" {
+  type        = string
+  default     = "stockguard-procurement"
+  description = "DynamoDB table for procurement sessions and WebRTC voice grants."
+}
+
+variable "webrtc_judge_mode_enabled" {
+  type        = bool
+  default     = false
+  description = <<-EOT
+    Master switch for WebRTC Judge Mode.
+
+    Defaults to false. Turning it on is not sufficient on its own: a real
+    ConnectWebRtcContactPort must also be supplied, and the protected backend
+    session endpoint must exist. The repository ships only
+    DisabledConnectWebRtcContactPort, which throws, so this flag alone cannot
+    start a billable Amazon Connect contact.
+
+    See docs/adr-0001-webrtc-judge-portal.md.
+  EOT
+}
