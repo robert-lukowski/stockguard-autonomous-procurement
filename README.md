@@ -2,11 +2,33 @@
 
 Autonomous multilingual procurement with independently validated, policy-bounded execution.
 
-StockGuard predicts an inventory shortage, uses CALL-E to collect comparable offers from approved suppliers in their preferred languages, validates original-language evidence against deterministic procurement policy, and creates a synthetic purchase order only when every control passes. If no offer complies, it escalates a tightly bounded operational decision to a human manager without allowing a voice-based policy override or order.
+StockGuard turns a spoken procurement request into a policy-bounded, auditable decision. A judge states what they need in their own words; the request is resolved against a closed catalog, priced through a controlled Supplier Tool, checked against deterministic procurement policy, and turned into a synthetic purchase request only when every control passes and the human explicitly confirms. If policy cannot approve it autonomously, it escalates to a human without allowing a conversational policy override or order.
 
-## Current foundation
+**Architecture note.** Bot-to-bot PSTN calling (CALL-E dialling a synthetic Lex supplier) is no longer the MVP architecture; live calls proved unstable at turn-taking and disconnected. Voice is now the *human-facing* interface and supplier access is a controlled tool. See [ADR 0001](docs/adr-0001-webrtc-judge-portal.md). The CALL-E adapter remains in the repository as an inactive experimental adapter.
 
-The React 19 product dashboard currently provides:
+## Judge Portal — the active path
+
+`src/server/procurement` is a channel-independent procurement core, and the
+Judge Portal drives it over a local text channel with **no telephony, no AWS
+call and no credential**:
+
+- a mission card (product, quantity, maximum budget, required delivery);
+- deterministic natural-language resolution against a closed catalog, so an
+  out-of-domain request such as pizza is refused rather than guessed at;
+- the deterministic supplier simulator invoked in-process as the Supplier Tool;
+- the existing thirteen-check evidence-aware Policy Gateway, unchanged;
+- accept / reject / needs-human-review, with explicit confirmation before any
+  purchase request is created;
+- idempotent replay of a repeated confirmation;
+- a hash-chained audit trail and CloudWatch-EMF metric events.
+
+A future Amazon Connect WebRTC voice channel plugs into the same core through
+`src/server/webrtc`. It is a seam only: the sole provider shipped fails closed,
+the flag defaults off, and the browser never receives AWS credentials.
+
+## Existing foundation
+
+The React 19 product dashboard also provides:
 
 - one predicted CF-220 stockout;
 - three approved suppliers in Germany, France, and Poland;
@@ -38,7 +60,13 @@ The manager escalation preview demonstrates:
 
 A request such as “increase the budget and buy anyway” is deterministically converted to `REQUIRES_AUTHENTICATED_HUMAN_APPROVAL`. It does not change policy and does not create an order.
 
-No real calls, purchases, suppliers, organizations, or production data are used.
+No purchases, real suppliers, organizations, or production data are used, and
+nothing on the Judge Portal path places a telephone call.
+
+Real calls **were** placed earlier against the Amazon Connect sandbox on the
+now-inactive bot-to-bot path; the instability observed during them is why that
+path was retired. See [ADR 0001](docs/adr-0001-webrtc-judge-portal.md) for what
+the repository does and does not establish about that.
 
 ## Run locally
 
@@ -66,6 +94,8 @@ The local backend core implements these semantics through mockable ports. It use
 The repository now also contains framework-neutral API Gateway/Lambda handler contracts, DynamoDB command adapters for conditional session claims, rate limits, the global call budget and webhook deduplication, plus a Secrets Manager access-code adapter. Supplier-side contracts include an allowlisted Connect test-number boundary, a six-digit short-lived routing code, RFQ/profile/dataset correlation and version-pinned synthetic data. They are tested as code only: no AWS SDK composition root, stack or resource has been deployed, and the live CALL-E path remains disabled. KMS signing still requires a live backend adapter.
 
 The no-compliant-offer demo now sources its three repeatable synthetic supplier profiles from a dedicated data service. A future Amazon Connect/Lex/Lambda deployment can expose the same profiles as a conversational test counterparty, including a follow-up about missing quantity. This is a test harness, not the claimed business value: production CALL-E calls would target supplier humans, sales desks, IVRs or existing telephony systems when no current API/EDI integration exists.
+
+See [ADR 0001 — Judge Portal voice, controlled tools, and the removal of bot-to-bot PSTN](docs/adr-0001-webrtc-judge-portal.md) for why the architecture changed, what stays preserved but inactive, the WebRTC seam, and the security and cost controls.
 
 See [Judge Mode — Manager Escalation](docs/judge-mode-manager-escalation.md) for the state model, API contract, proposed AWS deployment, guardrails, failure behavior and implementation roadmap.
 

@@ -1,7 +1,45 @@
 # AWS live supplier runtime
 
-Infrastructure for **one controlled English CALL-E qualification**. Nothing in
-this document has been deployed, and no real call has been placed.
+Infrastructure for **one controlled English CALL-E qualification**.
+
+> ## Deployment status — corrected 2026-09-04
+>
+> An earlier version of this document stated that nothing had been deployed and
+> no real call had been placed. Repository evidence contradicts that, so the
+> claim is corrected here. Facts and assumptions are kept separate.
+>
+> **Established by evidence in this repository:**
+>
+> - Live calls reached this contact flow. `infrastructure/terraform/connect.tf`
+>   records that the greeting was split out of the Lex block because *"the first
+>   live calls proved that playing Text while Lex gathers input permits barge-in
+>   and messy turn-taking"*, and PR #63 (`3323391`, `3dcdf52`, `8966f66`) is a
+>   series of turn-taking fixes for observed behaviour.
+> - `terraform apply` ran against AWS at least twice. `connect.tf` describes an
+>   ordering hazard that "has already bitten twice" and a broken Terraform state
+>   entry left by "the apply that failed with `AlreadyExists`".
+> - The Lex bot exists in AWS. `connect.tf` cites `aws lexv2-models list-intents`
+>   run "against the live bot".
+> - Call-disconnect instability during those calls is the stated reason for the
+>   architecture pivot in [ADR 0001](./adr-0001-webrtc-judge-portal.md).
+>
+> **NOT established, and still open:**
+>
+> - No row of [`calle-live-qualification-matrix.md`](./calle-live-qualification-matrix.md)
+>   has been filled in, so no CALL-E API observation is recorded.
+> - Every row of [`calle-assumptions-register.md`](./calle-assumptions-register.md)
+>   remains unverified. In particular, whether CALL-E returns `fieldEvidence`
+>   and labels the callee `"user"` is still unknown.
+> - Whether a full end-to-end run ever produced a valid structured result and a
+>   policy decision is not recorded anywhere in this repository.
+> - The exact dates, call count and outcomes are not recorded. Anyone stating
+>   them should read the AWS account, not this document.
+>
+> Since the pivot, none of this is on the MVP path. See ADR 0001.
+
+**This is no longer the primary architecture.** Bot-to-bot PSTN left the MVP in
+[ADR 0001](./adr-0001-webrtc-judge-portal.md); what follows is preserved as the
+design record of the inactive telephony path.
 
 ## What this proves
 

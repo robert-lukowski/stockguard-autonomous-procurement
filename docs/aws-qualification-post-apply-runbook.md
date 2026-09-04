@@ -1,7 +1,18 @@
 # AWS qualification post-apply runbook
 
 Starts exactly where `Terraform Apply` ends and stops at the single
-qualification call. Nothing here has been performed.
+qualification call.
+
+> **Corrected 2026-09-04.** This runbook previously said "nothing here has been
+> performed". That is not supportable: `infrastructure/terraform/connect.tf`
+> records live calls reaching the flow and an apply that failed with
+> `AlreadyExists`, and step 5 below already notes that mis-ordering "has already
+> cost one failed apply". Which individual steps were performed, and in what
+> order, is **not** recorded in this repository — read the AWS account rather
+> than trusting any claim here.
+>
+> This path is no longer on the MVP. See
+> [ADR 0001](./adr-0001-webrtc-judge-portal.md).
 
 Terraform deploys the runtime but deliberately does **not** wire it to the
 telephone. Three things stay manual, each because it is irreversible in a way a

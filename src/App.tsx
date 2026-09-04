@@ -12,6 +12,7 @@ import { Disclosure } from "./ui/Disclosure";
 import { LiveQualificationPanel } from "./ui/LiveQualificationPanel";
 import { RuntimeBadge, RuntimeLegend } from "./ui/RuntimeBadge";
 import { runtimeClassificationOrder } from "./ui/runtimeClassification";
+import { JudgePortalPanel } from "./ui/judge-portal/JudgePortalPanel";
 import { JudgeWalkthrough } from "./ui/walkthrough/JudgeWalkthrough";
 
 const pillars = [
@@ -92,6 +93,8 @@ export default function App() {
       </header>
 
       <main className="mx-auto w-full max-w-5xl space-y-8 px-5 pb-20 sm:px-8">
+        <JudgePortalPanel />
+
         <JudgeWalkthrough />
 
         <LiveQualificationPanel />

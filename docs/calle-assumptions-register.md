@@ -3,6 +3,13 @@
 Every row is something the code currently **assumes**. None has been observed
 against the real CALL-E API.
 
+> **Status 2026-09-04.** Still true, and now deferred rather than pending. Live
+> calls did reach the Amazon Connect side (see
+> [ADR 0001](./adr-0001-webrtc-judge-portal.md) for the evidence), but nothing
+> was recorded about the CALL-E API itself, so every row below stands
+> unverified. Bot-to-bot PSTN has left the MVP; this register becomes live work
+> again only if outbound supplier calling is revived.
+
 **These must not be "fixed" by guessing.** Changing an assumption without an
 observation just replaces one guess with another, and loses the record that it
 was ever uncertain. Fill the Observed column from a controlled run, then
