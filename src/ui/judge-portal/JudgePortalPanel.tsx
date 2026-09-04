@@ -19,6 +19,7 @@ import {
 } from "../../server/procurement";
 import { RuntimeBadge } from "../RuntimeBadge";
 import { resolveJudgePortalConfig } from "./judgePortalConfig";
+import { startVoiceSession, type VoiceSessionState } from "./voiceSessionClient";
 
 type Phase = "idle" | "running" | "awaiting-decision" | "done";
 
@@ -46,6 +47,7 @@ export function JudgePortalPanel() {
   const [decision, setDecision] = useState<ConfirmationResult | null>(null);
   const [report, setReport] = useState<RunReport | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [voice, setVoice] = useState<VoiceSessionState>({ status: "idle" });
   const channelRef = useRef<LocalTextChannel | null>(null);
   const sessionRef = useRef<string | null>(null);
 
@@ -56,6 +58,7 @@ export function JudgePortalPanel() {
     setDecision(null);
     setReport(null);
     setError(null);
+    setVoice({ status: "idle" });
     channelRef.current = null;
     sessionRef.current = null;
     setPhase("idle");
@@ -122,6 +125,29 @@ export function JudgePortalPanel() {
     }
   };
 
+  /**
+   * Asks the protected backend for a voice session.
+   *
+   * The browser never talks to Amazon Connect and never holds a credential: it
+   * posts a session id to an authenticated endpoint and renders whatever that
+   * endpoint decides. Every refusal below was decided server-side.
+   */
+  const startVoice = async () => {
+    const sessionId = sessionRef.current;
+    if (!config.webRtcEnabled || !config.sessionEndpoint || !sessionId) return;
+    setVoice({ status: "starting" });
+    setVoice(await startVoiceSession(config.sessionEndpoint, sessionId, missionId));
+  };
+
+  const voiceMessage =
+    voice.status === "unavailable" || voice.status === "refused" || voice.status === "error"
+      ? voice.message
+      : voice.status === "ready"
+        ? `Voice session open until ${voice.expiresAt.slice(11, 19)} UTC.`
+        : voice.status === "starting"
+          ? "Requesting a voice session from the protected backend..."
+          : config.voiceStatus;
+
   const finalOutcome = decision?.outcome ?? turn?.outcome ?? null;
 
   return (
@@ -145,7 +171,21 @@ export function JudgePortalPanel() {
 
       <div className="mt-4 flex flex-wrap items-center gap-2 rounded-lg border border-ground-700/50 px-3 py-2 text-xs text-ground-500">
         <Mic aria-hidden="true" className="size-3.5" />
-        <span>{config.voiceStatus}</span>
+        <span>{voiceMessage}</span>
+        {config.webRtcEnabled ? (
+          <button
+            type="button"
+            onClick={startVoice}
+            disabled={phase === "idle" || voice.status === "starting" || voice.status === "ready"}
+            className="ml-auto rounded-md border border-ground-700/60 px-2.5 py-1 text-ground-300 disabled:opacity-50"
+          >
+            Start voice session
+          </button>
+        ) : (
+          <span className="ml-auto rounded-md border border-ground-700/60 px-2 py-0.5 text-[10px] tracking-wide uppercase">
+            local demo
+          </span>
+        )}
       </div>
 
       <div className="mt-5 grid gap-4 sm:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">

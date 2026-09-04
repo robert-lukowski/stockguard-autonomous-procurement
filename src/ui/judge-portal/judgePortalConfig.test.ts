@@ -23,9 +23,20 @@ describe("judge portal configuration", () => {
   });
 
   it("enables the seam only with both the flag and an endpoint", () => {
-    const config = resolveJudgePortalConfig("true", "https://example.invalid/session");
+    const config = resolveJudgePortalConfig("true", " https://example.invalid/session ");
 
     expect(config.webRtcEnabled).toBe(true);
+    expect(config.sessionEndpoint).toBe("https://example.invalid/session");
     expect(config.voiceStatus).toContain("never receives AWS credentials");
+  });
+
+  it("never exposes an endpoint while voice is unavailable", () => {
+    for (const [flag, endpoint] of [
+      [undefined, undefined],
+      ["true", undefined],
+      ["false", "https://example.invalid/session"],
+    ] as Array<[string | undefined, string | undefined]>) {
+      expect(resolveJudgePortalConfig(flag, endpoint).sessionEndpoint).toBeNull();
+    }
   });
 });

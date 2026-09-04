@@ -10,6 +10,8 @@ import { isWebRtcJudgeModeEnabled } from "../../server/webrtc";
  */
 export type JudgePortalConfig = {
   webRtcEnabled: boolean;
+  /** The protected backend endpoint. Null whenever voice is unavailable. */
+  sessionEndpoint: string | null;
   /** Why voice is unavailable, in words a judge can act on. */
   voiceStatus: string;
 };
@@ -19,17 +21,20 @@ export function resolveJudgePortalConfig(
   rawSessionEndpoint: string | undefined = import.meta.env?.VITE_WEBRTC_SESSION_URL,
 ): JudgePortalConfig {
   const flagged = isWebRtcJudgeModeEnabled(rawFlag);
-  const endpointConfigured =
-    typeof rawSessionEndpoint === "string" && rawSessionEndpoint.trim().length > 0;
+  const endpoint =
+    typeof rawSessionEndpoint === "string" && rawSessionEndpoint.trim().length > 0
+      ? rawSessionEndpoint.trim()
+      : null;
 
   if (!flagged) {
     return {
       webRtcEnabled: false,
+      sessionEndpoint: null,
       voiceStatus:
         "Browser voice is off in this build. The mission runs over the local text channel, which exercises the same procurement core.",
     };
   }
-  if (!endpointConfigured) {
+  if (endpoint === null) {
     /*
      * Flag on, backend absent. Fail closed rather than letting the portal try
      * to reach Amazon Connect from the browser: a WebRTC contact may only ever
@@ -37,12 +42,14 @@ export function resolveJudgePortalConfig(
      */
     return {
       webRtcEnabled: false,
+      sessionEndpoint: null,
       voiceStatus:
         "Browser voice is enabled but no protected session endpoint is configured, so no contact can be started.",
     };
   }
   return {
     webRtcEnabled: true,
+    sessionEndpoint: endpoint,
     voiceStatus:
       "Browser voice is enabled. A session is requested from the protected backend endpoint; the browser never receives AWS credentials.",
   };
