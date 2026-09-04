@@ -181,9 +181,31 @@ resource "aws_lambda_function" "this" {
   depends_on = [aws_cloudwatch_log_group.this]
 }
 
-# Public HTTPS is required because GitHub Pages cannot hold AWS credentials.
-# The request is still gated inside the Lambda by the server-side Judge PIN,
-# and the request cannot choose a destination, supplier, SKU or quantity.
+# PUBLIC, UNAUTHENTICATED ENDPOINT THAT SPENDS MONEY.
+#
+# authorization_type = "NONE" means AWS performs no authorization at all: any
+# request on the internet reaches the Lambda, and an accepted POST places a
+# real, paid outbound telephone call. Public HTTPS is required because GitHub
+# Pages cannot hold AWS credentials, so the whole boundary is inside the
+# function.
+#
+# What that boundary actually is:
+#   - a server-side Judge PIN, compared with timingSafeEqual;
+#   - a required x-confirm: PLACE-CALL header;
+#   - a destination, supplier profile, SKU, quantity and deadline the request
+#     cannot choose.
+#
+# What it is NOT, and must not be described as:
+#   - a rate limit. There is none. Nothing throttles a caller who knows the PIN.
+#   - a concurrency cap. The reservation above is deliberately absent.
+#   - a durable call budget. CallEApiAdapter.startedCallsByWorkflow is a Map in
+#     one container's memory; it does not survive a cold start and is not shared
+#     across concurrent invocations, so it bounds a single warm container only.
+#
+# This whole module is created only when var.live_caller_enabled is true, which
+# defaults to false. Before enabling it, add a durable cross-invocation spend
+# control - the DynamoDB conditional-write pattern in
+# src/server/judge/aws/dynamo.ts is the one already proven in this repository.
 #
 # With hashicorp/aws 6.x, authorization_type=NONE also installs the two Lambda
 # resource-policy permissions now required for Function URL invocation.

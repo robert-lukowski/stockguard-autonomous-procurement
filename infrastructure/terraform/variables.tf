@@ -116,3 +116,31 @@ variable "log_retention_days" {
   default     = 7
   description = "CloudWatch retention. Set explicitly so logs cannot grow forever."
 }
+
+variable "live_caller_enabled" {
+  type        = bool
+  default     = false
+  description = <<-EOT
+    DANGEROUS. Creates the PSTN live-caller Lambda and a PUBLIC Lambda Function
+    URL with authorization_type = "NONE". Every accepted POST to that URL places
+    a real, paid outbound telephone call through the external CALL-E vendor.
+
+    Defaults to false, and the Judge Portal MVP does not need it: the
+    channel-independent procurement core in src/server/procurement runs the
+    whole demo with no telephony at all.
+
+    What actually bounds the endpoint when it IS enabled, stated exactly:
+      - a server-side Judge PIN compared with timingSafeEqual;
+      - a required x-confirm: PLACE-CALL header;
+      - a fixed destination, SKU, quantity and deadline the caller cannot choose.
+
+    What does NOT bound it, and must not be described as if it did:
+      - there is NO server-side rate limit;
+      - there is NO reserved concurrency;
+      - CallEApiAdapter.startedCallsByWorkflow is a per-container Map, so it is
+        NOT a durable or global call budget. It does not survive a cold start
+        and is not shared across concurrent invocations.
+
+    Do not set this to true without a durable, cross-invocation spend control.
+  EOT
+}

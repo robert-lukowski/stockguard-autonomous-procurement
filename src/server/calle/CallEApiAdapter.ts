@@ -136,6 +136,16 @@ export class CallEApiAdapter implements SupplierCallingPort {
   private readonly baseUrl: string;
   private readonly fetchImplementation: FetchLike;
   private readonly httpTimeoutMs: number;
+  /**
+   * Per-container call counter. NOT a spend control.
+   *
+   * This Map lives in one process. It does not survive a Lambda cold start and
+   * is not shared across concurrent containers, so it bounds repeat calls
+   * within a single warm invocation only. It must never be described, in code
+   * or in a document, as a global rate limit, a durable idempotency control or
+   * a financial safety boundary - a durable, cross-invocation store is the only
+   * thing that can be those.
+   */
   private readonly startedCallsByWorkflow = new Map<string, number>();
 
   constructor(private readonly config: CallEApiConfig) {

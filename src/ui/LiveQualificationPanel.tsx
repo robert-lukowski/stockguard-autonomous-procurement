@@ -26,7 +26,10 @@ function resolveBackendUrl(raw: string | undefined): string | null {
 function humanError(status: number, body: unknown): string {
   if (status === 401) return "The Judge PIN was not accepted.";
   if (status === 400) return "Type PLACE-CALL exactly to confirm the live demo.";
-  if (status === 429) return "A live qualification is already in progress. Try again when it finishes.";
+  // Deliberately no 429 branch: the live-caller Lambda implements no
+  // server-side rate limit, so claiming "already in progress" would describe a
+  // control that does not exist. See var.live_caller_enabled in
+  // infrastructure/terraform/variables.tf.
   if (body && typeof body === "object" && "error" in body) {
     return `Live qualification failed: ${String((body as { error: unknown }).error)}`;
   }
