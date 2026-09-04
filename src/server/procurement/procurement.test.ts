@@ -111,7 +111,7 @@ describe("out-of-domain requests", () => {
 describe("invalid quantity", () => {
   it("refuses a quantity outside the catalog order range", async () => {
     const { orchestrator } = harness();
-    const session = orchestrator.startSession("MISSION-SSD-20");
+    const session = await orchestrator.startSession("MISSION-SSD-20");
 
     const result = await orchestrator.tools.getSupplierQuote(
       session.sessionId,
@@ -127,7 +127,7 @@ describe("invalid quantity", () => {
 
   it("refuses a SKU that is not in the catalog", async () => {
     const { orchestrator } = harness();
-    const session = orchestrator.startSession("MISSION-SSD-20");
+    const session = await orchestrator.startSession("MISSION-SSD-20");
 
     const result = await orchestrator.tools.getSupplierQuote(
       session.sessionId,
@@ -315,7 +315,7 @@ describe("tool failure", () => {
 describe("quote provenance", () => {
   it("refuses an evaluation for a quote the tool never issued", async () => {
     const { orchestrator } = harness();
-    const session = orchestrator.startSession("MISSION-SSD-20");
+    const session = await orchestrator.startSession("MISSION-SSD-20");
 
     const result = await orchestrator.tools.evaluatePurchase(
       session.sessionId,
@@ -344,9 +344,11 @@ describe("quote provenance", () => {
     const { sessionId } = await channel.start("MISSION-SSD-20");
     const turn = await channel.say(sessionId, "I need twenty industrial SSD drives within a week.");
 
-    const tampered = sessions.get(sessionId)!;
+    // Reaches past the store's own API on purpose: the point is to prove the
+    // provenance hash catches a record edited outside the tool boundary.
+    const tampered = (await sessions.get(sessionId))!;
     tampered.quotes[turn.quote!.quoteId].unitPrice = 1;
-    sessions.save(tampered);
+    await sessions.putQuote(sessionId, tampered.quotes[turn.quote!.quoteId]);
 
     const result = await orchestrator.tools.createPurchaseRequest(
       sessionId,

@@ -32,7 +32,7 @@ export interface ProcurementChannel {
 }
 
 type OrchestratorLike = {
-  startSession(missionId: string): { sessionId: string; missionId: string };
+  startSession(missionId: string): Promise<{ sessionId: string; missionId: string }>;
   handleUtterance(sessionId: string, text: string): Promise<TurnResult>;
   confirm(
     sessionId: string,
@@ -67,7 +67,7 @@ export class LocalTextChannel implements ProcurementChannel {
   async start(missionId: string): Promise<{ sessionId: string; mission: JudgeMission }> {
     const mission = findMission(missionId);
     if (!mission) throw new Error(`Unknown mission ${missionId}`);
-    const session = this.orchestrator.startSession(missionId);
+    const session = await this.orchestrator.startSession(missionId);
     return { sessionId: session.sessionId, mission };
   }
 

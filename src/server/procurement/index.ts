@@ -59,8 +59,17 @@ export type {
   ProcurementAuditEventType,
   ProcurementAuditProof,
 } from "./audit";
-export { InMemoryProcurementSessionStore } from "./sessionStore";
-export type { ProcurementSession, ProcurementSessionStore } from "./sessionStore";
+export {
+  InMemoryProcurementSessionStore,
+  ProcurementSessionNotFound,
+} from "./sessionStore";
+export type {
+  ConfirmationClaim,
+  ProcurementSession,
+  ProcurementSessionCore,
+  ProcurementSessionStore,
+} from "./sessionStore";
+export { DynamoProcurementSessionStore } from "./aws";
 export { supplierProfileForSku, supplierProfileIdForSku } from "./supplierCatalog";
 export { catalogCategoryLabels } from "./types";
 export type {

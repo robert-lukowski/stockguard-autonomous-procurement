@@ -176,15 +176,14 @@ export class ProcurementOrchestrator {
     this.emitted.push(metric);
   }
 
-  private append(session: ProcurementSession, event: ProcurementAuditEvent): void {
-    session.audit.push(event);
-  }
-
   private now(): string {
     return this.clock().toISOString();
   }
 
-  startSession(missionId: string, sessionId = this.newId("session")): ProcurementSession {
+  async startSession(
+    missionId: string,
+    sessionId = this.newId("session"),
+  ): Promise<ProcurementSession> {
     const mission = findMission(missionId);
     if (!mission) throw new Error(`Unknown mission ${missionId}`);
 
@@ -199,18 +198,16 @@ export class ProcurementOrchestrator {
       evaluations: {},
       purchaseRequestsByToken: {},
       approvals: {},
-      audit: [],
+      audit: [
+        auditEvent("SESSION_STARTED", sessionId, now.toISOString(), {
+          missionId: mission.missionId,
+          channel: this.channel,
+        }),
+      ],
       outcome: null,
       completedAt: null,
     };
-    this.append(
-      session,
-      auditEvent("SESSION_STARTED", sessionId, session.startedAt, {
-        missionId: mission.missionId,
-        channel: this.channel,
-      }),
-    );
-    if (this.sessions.create(session) === "DUPLICATE") {
+    if ((await this.sessions.create(session)) === "DUPLICATE") {
       throw new Error(`Session ${sessionId} already exists`);
     }
     this.metric("RunStarted", 1, mission.missionId, sessionId);
@@ -224,18 +221,26 @@ export class ProcurementOrchestrator {
    * The turn deliberately stops at the confirmation request. Creating the
    * purchase request is a separate call because it needs a separate, explicit
    * human act — not a sentence a model decided sounded like agreement.
+   *
+   * Audit events are collected locally and appended in one call at the end of
+   * the turn. The tools own their own writes, so the orchestrator never needs
+   * to read a session back just to carry its audit forward.
    */
   async handleUtterance(sessionId: string, text: string): Promise<TurnResult> {
-    const session = this.sessions.get(sessionId);
+    const session = await this.sessions.get(sessionId);
     if (!session) throw new Error(`Unknown session ${sessionId}`);
     const mission = findMission(session.missionId);
     if (!mission) throw new Error(`Unknown mission ${session.missionId}`);
 
     const invocations: ToolInvocationRecord[] = [];
+    const events: ProcurementAuditEvent[] = [];
+    const record = (
+      type: Parameters<typeof auditEvent>[0],
+      detail: Record<string, string | number | boolean | null> = {},
+    ) => events.push(auditEvent(type, sessionId, this.now(), detail));
+
     const recognized = interpretUtterance(text);
-    this.append(session, auditEvent("UTTERANCE_RECEIVED", sessionId, this.now(), {
-      characters: text.length,
-    }));
+    record("UTTERANCE_RECEIVED", { characters: text.length });
 
     const assumed: ResolvedRequest["assumed"] = [];
     if (recognized.quantity === null) assumed.push("quantity");
@@ -246,12 +251,12 @@ export class ProcurementOrchestrator {
       requiredWithinDays: recognized.requiredWithinDays ?? mission.requiredDeliveryDays,
       assumed,
     };
-    this.append(session, auditEvent("REQUEST_INTERPRETED", sessionId, this.now(), {
+    record("REQUEST_INTERPRETED", {
       productQuery: resolved.productQuery,
       quantity: resolved.quantity,
       requiredWithinDays: resolved.requiredWithinDays,
       assumedFields: assumed.join(",") || "none",
-    }));
+    });
 
     const search = this.tools.searchInventory(resolved.productQuery, mission.allowedCategories);
     invocations.push({
@@ -271,17 +276,14 @@ export class ProcurementOrchestrator {
             matches: [],
             supportedCategories: mission.allowedCategories,
           };
-      this.append(session, auditEvent("OUT_OF_DOMAIN_REJECTED", sessionId, this.now(), {
-        productQuery: resolved.productQuery,
-      }));
-      const deterministic = outOfDomainMessage(searchResult, mission);
+      record("OUT_OF_DOMAIN_REJECTED", { productQuery: resolved.productQuery });
       const narration = await narrateSafely(this.narrator, {
         kind: "OUT_OF_DOMAIN",
-        deterministicMessage: deterministic,
+        deterministicMessage: outOfDomainMessage(searchResult, mission),
         allowedFigures: [],
         facts: { productQuery: resolved.productQuery },
       });
-      return this.finishTurn(session, mission, {
+      return this.finishTurn(sessionId, mission, events, {
         message: narration.message,
         narrationMode: narration.mode,
         recognized,
@@ -296,14 +298,13 @@ export class ProcurementOrchestrator {
     }
 
     if (search.value.status === "AMBIGUOUS") {
-      const deterministic = ambiguousProductMessage(search.value);
       const narration = await narrateSafely(this.narrator, {
         kind: "AMBIGUOUS_PRODUCT",
-        deterministicMessage: deterministic,
+        deterministicMessage: ambiguousProductMessage(search.value),
         allowedFigures: search.value.matches.map((match) => match.sku),
         facts: { matches: search.value.matches.length },
       });
-      return this.finishTurn(session, mission, {
+      return this.finishTurn(sessionId, mission, events, {
         message: narration.message,
         narrationMode: narration.mode,
         recognized,
@@ -318,17 +319,12 @@ export class ProcurementOrchestrator {
     }
 
     const match = search.value.matches[0];
-    this.append(session, auditEvent("PRODUCT_RESOLVED", sessionId, this.now(), {
-      sku: match.sku,
-      name: match.name,
-      score: match.score,
-    }));
+    record("PRODUCT_RESOLVED", { sku: match.sku, name: match.name, score: match.score });
 
     const requiredBy = new Date(
       this.clock().getTime() + resolved.requiredWithinDays * 24 * 60 * 60_000,
     ).toISOString();
 
-    this.sessions.save(session);
     const quoteResult = await this.tools.getSupplierQuote(
       sessionId,
       match.sku,
@@ -344,25 +340,18 @@ export class ProcurementOrchestrator {
     });
 
     if (!quoteResult.ok) {
-      const fresh = this.sessions.get(sessionId) ?? session;
-      fresh.audit = session.audit;
-      this.append(fresh, auditEvent("TOOL_FAILED", sessionId, this.now(), {
-        tool: "getSupplierQuote",
-        error: quoteResult.error,
-      }));
+      record("TOOL_FAILED", { tool: "getSupplierQuote", error: quoteResult.error });
       this.metric("ToolError", 1, mission.missionId, sessionId, {
         tool: "getSupplierQuote",
         error: quoteResult.error,
       });
-      const outcome: RunOutcome =
-        quoteResult.error === "SUPPLIER_TOOL_UNAVAILABLE" ? "TOOL_FAILURE" : "REJECTED_BY_POLICY";
       const narration = await narrateSafely(this.narrator, {
         kind: "TOOL_FAILURE",
         deterministicMessage: quoteResult.message,
         allowedFigures: [String(resolved.quantity)],
         facts: { error: quoteResult.error },
       });
-      return this.finishTurn(fresh, mission, {
+      return this.finishTurn(sessionId, mission, events, {
         message: narration.message,
         narrationMode: narration.mode,
         recognized,
@@ -372,15 +361,15 @@ export class ProcurementOrchestrator {
         evaluation: null,
         toolInvocations: invocations,
         confirmationToken: null,
-        outcome,
+        outcome:
+          quoteResult.error === "SUPPLIER_TOOL_UNAVAILABLE"
+            ? "TOOL_FAILURE"
+            : "REJECTED_BY_POLICY",
       });
     }
 
     const quote = quoteResult.value;
-    const withQuote = this.sessions.get(sessionId);
-    if (!withQuote) throw new Error(`Session ${sessionId} disappeared mid-turn`);
-    withQuote.audit = session.audit;
-    this.append(withQuote, auditEvent("QUOTE_ISSUED", sessionId, this.now(), {
+    record("QUOTE_ISSUED", {
       quoteId: quote.quoteId,
       sku: quote.sku,
       quantity: quote.quantity,
@@ -388,8 +377,7 @@ export class ProcurementOrchestrator {
       currency: quote.currency,
       deliveryAt: quote.deliveryAt,
       provenanceHash: quote.provenanceHash,
-    }));
-    this.sessions.save(withQuote);
+    });
 
     const evaluationResult = await this.tools.evaluatePurchase(
       sessionId,
@@ -405,20 +393,13 @@ export class ProcurementOrchestrator {
       at: this.now(),
     });
 
-    const afterEvaluation = this.sessions.get(sessionId);
-    if (!afterEvaluation) throw new Error(`Session ${sessionId} disappeared mid-turn`);
-    afterEvaluation.audit = withQuote.audit;
-
     if (!evaluationResult.ok) {
-      this.append(afterEvaluation, auditEvent("TOOL_FAILED", sessionId, this.now(), {
-        tool: "evaluatePurchase",
-        error: evaluationResult.error,
-      }));
+      record("TOOL_FAILED", { tool: "evaluatePurchase", error: evaluationResult.error });
       this.metric("ToolError", 1, mission.missionId, sessionId, {
         tool: "evaluatePurchase",
         error: evaluationResult.error,
       });
-      return this.finishTurn(afterEvaluation, mission, {
+      return this.finishTurn(sessionId, mission, events, {
         message: evaluationResult.message,
         narrationMode: "deterministic-fallback",
         recognized,
@@ -433,30 +414,29 @@ export class ProcurementOrchestrator {
     }
 
     const evaluation = evaluationResult.value;
-    this.append(afterEvaluation, auditEvent("POLICY_EVALUATED", sessionId, this.now(), {
+    record("POLICY_EVALUATED", {
       evaluationId: evaluation.evaluationId,
       outcome: evaluation.outcome,
       orderTotal: evaluation.orderTotal,
       currency: evaluation.orderCurrency,
       blockingChecks: evaluation.blockingCheckIds.join(",") || "none",
       humanReviewChecks: evaluation.humanReviewCheckIds.join(",") || "none",
-    }));
+    });
 
-    const allowedFigures = [
-      String(quote.unitPrice),
-      String(quote.quantity),
-      String(quote.availableQuantity),
-      String(evaluation.orderTotal),
-      String(mission.maximumBudget),
-      String(resolved.requiredWithinDays),
-      quote.deliveryAt,
-      quote.offerValidUntil,
-      quote.sku,
-    ];
     const narration = await narrateSafely(this.narrator, {
       kind: "EVALUATION_EXPLAINED",
       deterministicMessage: evaluation.explanation,
-      allowedFigures,
+      allowedFigures: [
+        String(quote.unitPrice),
+        String(quote.quantity),
+        String(quote.availableQuantity),
+        String(evaluation.orderTotal),
+        String(mission.maximumBudget),
+        String(resolved.requiredWithinDays),
+        quote.deliveryAt,
+        quote.offerValidUntil,
+        quote.sku,
+      ],
       facts: {
         outcome: evaluation.outcome,
         sku: quote.sku,
@@ -465,19 +445,16 @@ export class ProcurementOrchestrator {
     });
 
     if (evaluation.outcome === "ACCEPTED") {
-      this.append(afterEvaluation, auditEvent("CONFIRMATION_REQUESTED", sessionId, this.now(), {
-        evaluationId: evaluation.evaluationId,
-      }));
+      record("CONFIRMATION_REQUESTED", { evaluationId: evaluation.evaluationId });
     }
 
-    this.sessions.save(afterEvaluation);
     /*
      * A rejection is terminal: nothing further can be asked of the judge, so
      * the run completes here and is counted. ACCEPTED and HUMAN_REVIEW_REQUIRED
-     * both stay open, because each is waiting on a separate, explicit human
-     * act (`confirm` and `escalate` respectively).
+     * both stay open, because each is waiting on a separate, explicit human act
+     * (`confirm` and `escalate` respectively).
      */
-    return this.finishTurn(afterEvaluation, mission, {
+    return this.finishTurn(sessionId, mission, events, {
       message:
         evaluation.outcome === "ACCEPTED"
           ? `${narration.message} Shall I create the purchase request?`
@@ -494,49 +471,67 @@ export class ProcurementOrchestrator {
     });
   }
 
-  private finishTurn(
-    session: ProcurementSession,
+  private async finishTurn(
+    sessionId: string,
     mission: JudgeMission,
+    events: ProcurementAuditEvent[],
     turn: Omit<TurnResult, "sessionId" | "mission">,
-  ): TurnResult {
-    if (turn.outcome !== null && session.outcome === null) {
-      this.completeRun(session, mission, turn.outcome);
+  ): Promise<TurnResult> {
+    if (turn.outcome !== null) {
+      await this.completeRun(sessionId, mission, turn.outcome, events);
     } else {
-      this.sessions.save(session);
+      await this.sessions.appendAudit(sessionId, events);
     }
-    return { sessionId: session.sessionId, mission, ...turn };
+    return { sessionId, mission, ...turn };
   }
 
-  private completeRun(
-    session: ProcurementSession,
+  /**
+   * Marks the run finished and emits its outcome metrics.
+   *
+   * The store decides whether this call is the one that completes the run.
+   * Only `COMPLETED` emits metrics, so a replayed confirmation or a concurrent
+   * request cannot inflate the accepted-run count in CloudWatch or Grafana.
+   */
+  private async completeRun(
+    sessionId: string,
     mission: JudgeMission,
     outcome: RunOutcome,
-  ): void {
-    session.outcome = outcome;
-    session.completedAt = this.now();
-    this.append(session, auditEvent("RUN_COMPLETED", session.sessionId, session.completedAt, {
-      outcome,
-    }));
-    this.sessions.save(session);
+    events: ProcurementAuditEvent[] = [],
+  ): Promise<"COMPLETED" | "ALREADY_COMPLETED"> {
+    const completedAt = this.now();
+    const status = await this.sessions.complete(sessionId, outcome, completedAt);
+    await this.sessions.appendAudit(sessionId, [
+      ...events,
+      ...(status === "COMPLETED"
+        ? [auditEvent("RUN_COMPLETED", sessionId, completedAt, { outcome })]
+        : []),
+    ]);
+    if (status === "ALREADY_COMPLETED") return status;
 
-    const sessionId = session.sessionId;
+    const session = await this.sessions.get(sessionId);
+    const startedAt = session?.startedAt ?? completedAt;
+
     if (outcome === "PURCHASE_REQUEST_CREATED") {
       this.metric("RunAccepted", 1, mission.missionId, sessionId);
     }
-    if (outcome === "REJECTED_BY_POLICY" || outcome === "OUT_OF_DOMAIN" || outcome === "DECLINED_BY_USER") {
+    if (
+      outcome === "REJECTED_BY_POLICY" ||
+      outcome === "OUT_OF_DOMAIN" ||
+      outcome === "DECLINED_BY_USER"
+    ) {
       this.metric("RunRejected", 1, mission.missionId, sessionId, { outcome });
     }
     if (outcome === "HUMAN_APPROVAL_REQUESTED") {
       this.metric("RunHumanReview", 1, mission.missionId, sessionId);
     }
-
     this.metric(
       "RunDurationMs",
-      Math.max(0, Date.parse(session.completedAt) - Date.parse(session.startedAt)),
+      Math.max(0, Date.parse(completedAt) - Date.parse(startedAt)),
       mission.missionId,
       sessionId,
       { outcome },
     );
+    return status;
   }
 
   /**
@@ -551,7 +546,7 @@ export class ProcurementOrchestrator {
     confirmationToken: string,
     accepted: boolean,
   ): Promise<ConfirmationResult> {
-    const session = this.sessions.get(sessionId);
+    const session = await this.sessions.get(sessionId);
     if (!session) throw new Error(`Unknown session ${sessionId}`);
     const mission = findMission(session.missionId);
     if (!mission) throw new Error(`Unknown mission ${session.missionId}`);
@@ -559,10 +554,9 @@ export class ProcurementOrchestrator {
     const invocations: ToolInvocationRecord[] = [];
 
     if (!accepted) {
-      this.append(session, auditEvent("CONFIRMATION_DECLINED", sessionId, this.now(), {
-        evaluationId,
-      }));
-      this.completeRun(session, mission, "DECLINED_BY_USER");
+      await this.completeRun(sessionId, mission, "DECLINED_BY_USER", [
+        auditEvent("CONFIRMATION_DECLINED", sessionId, this.now(), { evaluationId }),
+      ]);
       return {
         sessionId,
         message: "Understood. I have not created a purchase request.",
@@ -574,10 +568,9 @@ export class ProcurementOrchestrator {
       };
     }
 
-    this.append(session, auditEvent("CONFIRMATION_RECEIVED", sessionId, this.now(), {
-      evaluationId,
-    }));
-    this.sessions.save(session);
+    const events: ProcurementAuditEvent[] = [
+      auditEvent("CONFIRMATION_RECEIVED", sessionId, this.now(), { evaluationId }),
+    ];
 
     const result = await this.tools.createPurchaseRequest(
       sessionId,
@@ -593,19 +586,18 @@ export class ProcurementOrchestrator {
       at: this.now(),
     });
 
-    const fresh = this.sessions.get(sessionId) ?? session;
-    fresh.audit = session.audit;
-
     if (!result.ok) {
-      this.append(fresh, auditEvent("TOOL_FAILED", sessionId, this.now(), {
-        tool: "createPurchaseRequest",
-        error: result.error,
-      }));
+      events.push(
+        auditEvent("TOOL_FAILED", sessionId, this.now(), {
+          tool: "createPurchaseRequest",
+          error: result.error,
+        }),
+      );
       this.metric("ToolError", 1, mission.missionId, sessionId, {
         tool: "createPurchaseRequest",
         error: result.error,
       });
-      this.completeRun(fresh, mission, "REJECTED_BY_POLICY");
+      await this.completeRun(sessionId, mission, "REJECTED_BY_POLICY", events);
       return {
         sessionId,
         message: result.message,
@@ -618,8 +610,7 @@ export class ProcurementOrchestrator {
     }
 
     const { request, replayed } = result.value;
-    this.append(
-      fresh,
+    events.push(
       auditEvent(
         replayed ? "PURCHASE_REQUEST_REPLAYED" : "PURCHASE_REQUEST_CREATED",
         sessionId,
@@ -634,15 +625,10 @@ export class ProcurementOrchestrator {
       ),
     );
 
-    /*
-     * A replay must not re-count the run. The metric is emitted only on the
-     * first creation, so an impatient double-submit cannot inflate the
-     * accepted-run count in CloudWatch or Grafana.
-     */
-    if (!replayed) {
-      this.completeRun(fresh, mission, "PURCHASE_REQUEST_CREATED");
+    if (replayed) {
+      await this.sessions.appendAudit(sessionId, events);
     } else {
-      this.sessions.save(fresh);
+      await this.completeRun(sessionId, mission, "PURCHASE_REQUEST_CREATED", events);
     }
 
     return {
@@ -660,7 +646,7 @@ export class ProcurementOrchestrator {
 
   /** Escalation path for a HUMAN_REVIEW_REQUIRED evaluation. */
   async escalate(sessionId: string, evaluationId: string): Promise<ConfirmationResult> {
-    const session = this.sessions.get(sessionId);
+    const session = await this.sessions.get(sessionId);
     if (!session) throw new Error(`Unknown session ${sessionId}`);
     const mission = findMission(session.missionId);
     if (!mission) throw new Error(`Unknown mission ${session.missionId}`);
@@ -676,23 +662,21 @@ export class ProcurementOrchestrator {
       },
     ];
 
-    const fresh = this.sessions.get(sessionId) ?? session;
-    fresh.audit = session.audit;
-
     if (!result.ok) {
-      this.append(fresh, auditEvent("TOOL_FAILED", sessionId, this.now(), {
-        tool: "requestHumanApproval",
-        error: result.error,
-      }));
+      await this.sessions.appendAudit(sessionId, [
+        auditEvent("TOOL_FAILED", sessionId, this.now(), {
+          tool: "requestHumanApproval",
+          error: result.error,
+        }),
+      ]);
       this.metric("ToolError", 1, mission.missionId, sessionId, {
         tool: "requestHumanApproval",
         error: result.error,
       });
-      this.sessions.save(fresh);
       return {
         sessionId,
         message: result.message,
-        outcome: fresh.outcome ?? "REJECTED_BY_POLICY",
+        outcome: session.outcome ?? "REJECTED_BY_POLICY",
         purchaseRequest: null,
         humanApproval: null,
         replayed: false,
@@ -700,11 +684,12 @@ export class ProcurementOrchestrator {
       };
     }
 
-    this.append(fresh, auditEvent("HUMAN_APPROVAL_REQUESTED", sessionId, this.now(), {
-      approvalRequestId: result.value.approvalRequestId,
-      reasons: result.value.reasonCheckIds.join(",") || "none",
-    }));
-    this.completeRun(fresh, mission, "HUMAN_APPROVAL_REQUESTED");
+    await this.completeRun(sessionId, mission, "HUMAN_APPROVAL_REQUESTED", [
+      auditEvent("HUMAN_APPROVAL_REQUESTED", sessionId, this.now(), {
+        approvalRequestId: result.value.approvalRequestId,
+        reasons: result.value.reasonCheckIds.join(",") || "none",
+      }),
+    ]);
 
     return {
       sessionId,
@@ -718,7 +703,7 @@ export class ProcurementOrchestrator {
   }
 
   async report(sessionId: string): Promise<RunReport> {
-    const session = this.sessions.get(sessionId);
+    const session = await this.sessions.get(sessionId);
     if (!session) throw new Error(`Unknown session ${sessionId}`);
 
     return {

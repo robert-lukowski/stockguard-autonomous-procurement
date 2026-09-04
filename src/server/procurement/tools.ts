@@ -171,20 +171,6 @@ function err<T>(error: ToolResult<T> & { ok: false }): ToolResult<T> {
   return error;
 }
 
-/**
- * The session disappeared between the guard read and the write-back read.
- *
- * Not reachable with the in-memory store, but a durable store can evict or
- * expire a session mid-call, and fabricating a success there would be the
- * worst possible failure mode for a tool that spends money.
- */
-function sessionVanished<T>(): ToolResult<T> {
-  return err<T>({
-    ok: false,
-    error: "SESSION_NOT_FOUND",
-    message: "The procurement session disappeared while the tool was running.",
-  });
-}
 
 function check(
   id: string,
@@ -233,8 +219,8 @@ export class ProcurementTools {
     this.supplierQuotes = config.supplierQuotes ?? new SimulatedSupplierQuoteTool();
   }
 
-  private session(sessionId: string): ToolResult<ProcurementSession> {
-    const session = this.sessions.get(sessionId);
+  private async session(sessionId: string): Promise<ToolResult<ProcurementSession>> {
+    const session = await this.sessions.get(sessionId);
     if (!session) {
       return err({
         ok: false,
@@ -274,7 +260,7 @@ export class ProcurementTools {
     quantity: number,
     requiredBy: string,
   ): Promise<ToolResult<SupplierQuote>> {
-    const session = this.session(sessionId);
+    const session = await this.session(sessionId);
     if (!session.ok) return session;
 
     const item = findCatalogItem(sku);
@@ -338,10 +324,7 @@ export class ProcurementTools {
       provenanceHash: await quoteProvenanceHash(draft),
     };
 
-    const updated = this.sessions.get(sessionId);
-    if (!updated) return sessionVanished();
-    updated.quotes[quote.quoteId] = quote;
-    this.sessions.save(updated);
+    await this.sessions.putQuote(sessionId, quote);
     return { ok: true, value: quote };
   }
 
@@ -388,7 +371,7 @@ export class ProcurementTools {
     mission: JudgeMission,
     requiredWithinDays: number,
   ): Promise<ToolResult<PurchaseEvaluation>> {
-    const session = this.session(sessionId);
+    const session = await this.session(sessionId);
     if (!session.ok) return session;
 
     const verified = await this.verifiedQuote(session.value, quoteId);
@@ -548,10 +531,7 @@ export class ProcurementTools {
       evaluatedAt,
     };
 
-    const updated = this.sessions.get(sessionId);
-    if (!updated) return sessionVanished();
-    updated.evaluations[evaluation.evaluationId] = evaluation;
-    this.sessions.save(updated);
+    await this.sessions.putEvaluation(sessionId, evaluation);
     return { ok: true, value: evaluation };
   }
 
@@ -569,7 +549,7 @@ export class ProcurementTools {
     confirmationToken: string,
     mission: JudgeMission,
   ): Promise<ToolResult<PurchaseRequestResult>> {
-    const session = this.session(sessionId);
+    const session = await this.session(sessionId);
     if (!session.ok) return session;
 
     const evaluation = session.value.evaluations[evaluationId];
@@ -671,13 +651,16 @@ export class ProcurementTools {
       synthetic: true,
     };
 
-    const updated = this.sessions.get(sessionId);
-    if (!updated) return sessionVanished();
-    const raced = updated.purchaseRequestsByToken[confirmationToken];
-    if (raced) return { ok: true, value: { request: raced, replayed: true } };
-    updated.purchaseRequestsByToken[confirmationToken] = request;
-    this.sessions.save(updated);
-    return { ok: true, value: { request, replayed: false } };
+    /*
+     * The token is consumed by a single atomic write, not by a read followed by
+     * a write. Two confirmations arriving together therefore produce one
+     * purchase request and one DUPLICATE, on one instance or on twenty.
+     */
+    const claim = await this.sessions.claimConfirmation(sessionId, confirmationToken, request);
+    return {
+      ok: true,
+      value: { request: claim.request, replayed: claim.kind === "DUPLICATE" },
+    };
   }
 
   /** Tool 5: escalate. Never creates an order and never edits policy. */
@@ -685,7 +668,7 @@ export class ProcurementTools {
     sessionId: string,
     evaluationId: string,
   ): Promise<ToolResult<HumanApprovalRequest>> {
-    const session = this.session(sessionId);
+    const session = await this.session(sessionId);
     if (!session.ok) return session;
 
     const evaluation = session.value.evaluations[evaluationId];
@@ -721,10 +704,7 @@ export class ProcurementTools {
       policyChanged: false,
     };
 
-    const updated = this.sessions.get(sessionId);
-    if (!updated) return sessionVanished();
-    updated.approvals[approval.approvalRequestId] = approval;
-    this.sessions.save(updated);
+    await this.sessions.putApproval(sessionId, approval);
     return { ok: true, value: approval };
   }
 }
