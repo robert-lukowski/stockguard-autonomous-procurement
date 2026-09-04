@@ -7,6 +7,13 @@ export type {
   TurnResult,
 } from "./ProcurementOrchestrator";
 export { LocalTextChannel } from "./channel";
+export { createLexVoiceHandler, toSpokenSummary } from "./lexVoiceHandler";
+export type {
+  LexVoiceDependencies,
+  LexVoiceEvent,
+  LexVoiceGuard,
+  LexVoiceResponse,
+} from "./lexVoiceHandler";
 export type { ProcurementChannel } from "./channel";
 export {
   findCatalogItem,

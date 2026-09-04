@@ -20,6 +20,12 @@ import {
 import { RuntimeBadge } from "../RuntimeBadge";
 import { resolveJudgePortalConfig } from "./judgePortalConfig";
 import { startVoiceSession, type VoiceSessionState } from "./voiceSessionClient";
+import {
+  startVoiceCall,
+  voiceState,
+  type VoiceCall,
+  type VoiceCallState,
+} from "./chimeVoiceClient";
 
 type Phase = "idle" | "running" | "awaiting-decision" | "done";
 
@@ -48,6 +54,9 @@ export function JudgePortalPanel() {
   const [report, setReport] = useState<RunReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [voice, setVoice] = useState<VoiceSessionState>({ status: "idle" });
+  const [call, setCall] = useState<VoiceCallState>(voiceState("idle"));
+  const callRef = useRef<VoiceCall | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const channelRef = useRef<LocalTextChannel | null>(null);
   const sessionRef = useRef<string | null>(null);
 
@@ -59,6 +68,9 @@ export function JudgePortalPanel() {
     setReport(null);
     setError(null);
     setVoice({ status: "idle" });
+    void callRef.current?.stop();
+    callRef.current = null;
+    setCall(voiceState("idle"));
     channelRef.current = null;
     sessionRef.current = null;
     setPhase("idle");
@@ -134,19 +146,53 @@ export function JudgePortalPanel() {
    */
   const startVoice = async () => {
     const sessionId = sessionRef.current;
-    if (!config.webRtcEnabled || !config.sessionEndpoint || !sessionId) return;
+    const audioElement = audioRef.current;
+    if (!config.webRtcEnabled || !config.sessionEndpoint || !sessionId || !audioElement) {
+      return;
+    }
+
     setVoice({ status: "starting" });
-    setVoice(await startVoiceSession(config.sessionEndpoint, sessionId, missionId));
+    const session = await startVoiceSession(config.sessionEndpoint, sessionId, missionId);
+    setVoice(session);
+    if (session.status !== "ready") return;
+
+    /*
+     * The microphone is requested only after the backend has granted a session.
+     * Prompting first would ask a judge for their microphone before knowing
+     * whether a contact could be started at all.
+     */
+    callRef.current = await startVoiceCall({
+      grant: session.grant,
+      audioElement,
+      onState: setCall,
+    });
   };
 
+  const endVoice = async () => {
+    await callRef.current?.stop();
+    callRef.current = null;
+  };
+
+  /*
+   * One line, and it must always say the most specific true thing: a live call
+   * state outranks the session state, which outranks the build configuration.
+   */
   const voiceMessage =
-    voice.status === "unavailable" || voice.status === "refused" || voice.status === "error"
-      ? voice.message
-      : voice.status === "ready"
-        ? `Voice session open until ${voice.expiresAt.slice(11, 19)} UTC.`
+    call.phase !== "idle"
+      ? call.message
+      : voice.status === "unavailable" || voice.status === "refused" || voice.status === "error"
+        ? voice.message
         : voice.status === "starting"
           ? "Requesting a voice session from the protected backend..."
           : config.voiceStatus;
+
+  const callActive = call.phase === "connected" || call.phase === "connecting";
+  const canStartVoice =
+    config.webRtcEnabled &&
+    phase !== "idle" &&
+    !callActive &&
+    voice.status !== "starting" &&
+    call.phase !== "requesting-microphone";
 
   const finalOutcome = decision?.outcome ?? turn?.outcome ?? null;
 
@@ -173,20 +219,33 @@ export function JudgePortalPanel() {
         <Mic aria-hidden="true" className="size-3.5" />
         <span>{voiceMessage}</span>
         {config.webRtcEnabled ? (
-          <button
-            type="button"
-            onClick={startVoice}
-            disabled={phase === "idle" || voice.status === "starting" || voice.status === "ready"}
-            className="ml-auto rounded-md border border-ground-700/60 px-2.5 py-1 text-ground-300 disabled:opacity-50"
-          >
-            Start voice session
-          </button>
+          <span className="ml-auto flex gap-2">
+            <button
+              type="button"
+              onClick={startVoice}
+              disabled={!canStartVoice}
+              className="rounded-md border border-ground-700/60 px-2.5 py-1 text-ground-300 disabled:opacity-50"
+            >
+              Start Voice Demo
+            </button>
+            <button
+              type="button"
+              onClick={endVoice}
+              disabled={!callActive}
+              className="rounded-md border border-ground-700/60 px-2.5 py-1 text-ground-300 disabled:opacity-50"
+            >
+              End
+            </button>
+          </span>
         ) : (
           <span className="ml-auto rounded-md border border-ground-700/60 px-2 py-0.5 text-[10px] tracking-wide uppercase">
             local demo
           </span>
         )}
       </div>
+      {/* Bound by the Chime SDK. Never autoplays: audio starts only once the
+          judge has explicitly started a session and granted the microphone. */}
+      <audio ref={audioRef} className="hidden" />
 
       <div className="mt-5 grid gap-4 sm:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
         <div className="rounded-xl border border-signal-500/30 bg-signal-500/[0.06] p-4">

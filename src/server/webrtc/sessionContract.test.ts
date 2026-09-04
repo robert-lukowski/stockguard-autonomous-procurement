@@ -33,7 +33,13 @@ function connectResponse(overrides: Record<string, unknown> = {}) {
       Meeting: {
         MeetingId: "meeting-1",
         MediaRegion: "eu-central-1",
-        MediaPlacement: { AudioHostUrl: "https://example.invalid/audio" },
+        MediaPlacement: {
+          AudioHostUrl: "https://audio.invalid",
+          SignalingUrl: "wss://signal.invalid",
+          TurnControlUrl: "https://turn.invalid",
+          ScreenDataUrl: "https://screen.invalid",
+          EventIngestionUrl: "https://events.invalid",
+        },
       },
     },
     $metadata: { httpStatusCode: 200, requestId: "req-1" },
@@ -88,10 +94,14 @@ describe("Connect response parsing", () => {
       attendeeId: "attendee-1",
       attendeeJoinToken: "join-token-1",
       mediaRegion: "eu-central-1",
+      audioHostUrl: "https://audio.invalid",
+      signalingUrl: "wss://signal.invalid",
+      turnControlUrl: "https://turn.invalid",
     });
-    // SDK metadata and unused nested structures are dropped, not forwarded.
+    // SDK metadata and endpoints the audio path does not use are dropped.
     expect(Object.keys(parsed)).not.toContain("$metadata");
-    expect(JSON.stringify(parsed)).not.toContain("MediaPlacement");
+    expect(JSON.stringify(parsed)).not.toContain("screen.invalid");
+    expect(JSON.stringify(parsed)).not.toContain("events.invalid");
   });
 
   it("fails closed on every missing or malformed field", () => {
@@ -102,6 +112,15 @@ describe("Connect response parsing", () => {
       ["ParticipantToken", connectResponse({ ParticipantToken: "" })],
       ["ConnectionData", connectResponse({ ConnectionData: undefined })],
       ["ConnectionData.Attendee", connectResponse({ ConnectionData: { Meeting: {} } })],
+      [
+        "MediaPlacement",
+        connectResponse({
+          ConnectionData: {
+            Attendee: { AttendeeId: "a", JoinToken: "j" },
+            Meeting: { MeetingId: "m", MediaRegion: "eu-central-1" },
+          },
+        }),
+      ],
     ];
 
     for (const [, raw] of cases) {
@@ -121,8 +140,11 @@ describe("protected voice session contract", () => {
     expect(Object.keys(result.grant.joinInformation).sort()).toEqual([
       "attendeeId",
       "attendeeJoinToken",
+      "audioHostUrl",
       "mediaRegion",
       "meetingId",
+      "signalingUrl",
+      "turnControlUrl",
     ]);
     // The raw Connect response never reaches the browser.
     expect(JSON.stringify(result.grant)).not.toContain("$metadata");

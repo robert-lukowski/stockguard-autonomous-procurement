@@ -186,3 +186,46 @@ variable "webrtc_judge_mode_enabled" {
     See docs/adr-0001-webrtc-judge-portal.md.
   EOT
 }
+
+variable "judge_auth_issuer" {
+  type        = string
+  default     = ""
+  description = <<-EOT
+    OIDC issuer URL for the Judge Portal's JWT authorizer.
+
+    Empty by default, and that emptiness is a security control rather than a
+    placeholder: local.judge_voice_enabled is false without it, so the session
+    API cannot be created without an authorizer. There is no configuration in
+    which the endpoint that starts a billable Amazon Connect contact is
+    reachable unauthenticated.
+  EOT
+}
+
+variable "judge_auth_audience" {
+  type        = string
+  default     = ""
+  description = "OIDC audience (client id) accepted by the Judge Portal's JWT authorizer. Empty disables the voice stack."
+}
+
+variable "judge_portal_origin" {
+  type        = string
+  default     = "https://robert-lukowski.github.io"
+  description = "The single browser origin allowed to call the voice session endpoint."
+}
+
+variable "voice_sessions_per_judge_per_hour" {
+  type        = number
+  default     = 3
+  description = <<-EOT
+    Per-judge ceiling on WebRTC contacts, enforced server-side in DynamoDB.
+
+    Each contact is billable, so this is a cost control. The API stage carries
+    its own throttle as well: that bounds request rate, this bounds how many
+    contacts one identity can actually start.
+  EOT
+
+  validation {
+    condition     = var.voice_sessions_per_judge_per_hour >= 1 && var.voice_sessions_per_judge_per_hour <= 20
+    error_message = "voice_sessions_per_judge_per_hour must be between 1 and 20."
+  }
+}

@@ -67,6 +67,15 @@ export type ParsedConnectContact = {
   attendeeId: string;
   attendeeJoinToken: string;
   mediaRegion: string;
+  /*
+   * MediaPlacement endpoints. The Chime SDK cannot join without them, and they
+   * are URLs rather than credentials: possessing one grants nothing without the
+   * attendee join token. Only the three the audio path uses are projected;
+   * ScreenDataUrl, EventIngestionUrl and the rest are dropped.
+   */
+  audioHostUrl: string;
+  signalingUrl: string;
+  turnControlUrl: string;
 };
 
 function requireObject(value: unknown, field: string): Record<string, unknown> {
@@ -98,6 +107,11 @@ export function parseConnectWebRtcResponse(raw: unknown): ParsedConnectContact {
   const attendee = requireObject(connectionData.Attendee, "ConnectionData.Attendee");
   const meeting = requireObject(connectionData.Meeting, "ConnectionData.Meeting");
 
+  const placement = requireObject(
+    meeting.MediaPlacement,
+    "ConnectionData.Meeting.MediaPlacement",
+  );
+
   return {
     contactId: requireString(response.ContactId, "ContactId"),
     participantId: requireString(response.ParticipantId, "ParticipantId"),
@@ -111,6 +125,18 @@ export function parseConnectWebRtcResponse(raw: unknown): ParsedConnectContact {
     mediaRegion: requireString(
       meeting.MediaRegion,
       "ConnectionData.Meeting.MediaRegion",
+    ),
+    audioHostUrl: requireString(
+      placement.AudioHostUrl,
+      "ConnectionData.Meeting.MediaPlacement.AudioHostUrl",
+    ),
+    signalingUrl: requireString(
+      placement.SignalingUrl,
+      "ConnectionData.Meeting.MediaPlacement.SignalingUrl",
+    ),
+    turnControlUrl: requireString(
+      placement.TurnControlUrl,
+      "ConnectionData.Meeting.MediaPlacement.TurnControlUrl",
     ),
   };
 }
@@ -135,6 +161,9 @@ export function toVoiceSessionGrant(
       attendeeId: contact.attendeeId,
       attendeeJoinToken: contact.attendeeJoinToken,
       mediaRegion: contact.mediaRegion,
+      audioHostUrl: contact.audioHostUrl,
+      signalingUrl: contact.signalingUrl,
+      turnControlUrl: contact.turnControlUrl,
     },
     expiresAt,
     singleUse: true,

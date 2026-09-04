@@ -18,10 +18,18 @@ function repoFile(...segments: string[]): string {
 const storage = repoFile("infrastructure", "terraform", "procurement-storage.tf");
 const variables = repoFile("infrastructure", "terraform", "variables.tf");
 
+/**
+ * The whole `variable` block, including its heredoc description.
+ *
+ * Slices to the next declaration rather than to the next "EOT": that marker
+ * also matches the heredoc's own opening delimiter, which would silently cut
+ * every description off at its first line.
+ */
 function variableBlock(name: string): string {
   const start = variables.indexOf(`variable "${name}"`);
   expect(start).toBeGreaterThan(-1);
-  return variables.slice(start, variables.indexOf("EOT", start));
+  const next = variables.indexOf('\nvariable "', start + 1);
+  return variables.slice(start, next === -1 ? undefined : next);
 }
 
 describe("procurement storage is disabled by default", () => {
@@ -93,5 +101,80 @@ describe("no in-memory adapter is described as a durable control", () => {
 
     expect(store).toContain("NOT a durable single-use control");
     expect(store).toContain("NOT a ceiling");
+  });
+});
+
+const judgeVoice = repoFile("infrastructure", "terraform", "judge-voice.tf");
+
+describe("the voice session endpoint cannot exist unauthenticated", () => {
+  it("cannot be created without a JWT issuer and audience", () => {
+    // Structural, not advisory: every voice resource carries this count.
+    expect(judgeVoice).toContain("length(trimspace(var.judge_auth_issuer)) > 0");
+    expect(judgeVoice).toContain("length(trimspace(var.judge_auth_audience)) > 0");
+    expect(variableBlock("judge_auth_issuer")).toMatch(/default\s*=\s*""/);
+    expect(variableBlock("judge_auth_audience")).toMatch(/default\s*=\s*""/);
+  });
+
+  it("attaches the authorizer to the one and only route", () => {
+    expect(judgeVoice).toContain('authorization_type = "JWT"');
+    expect(judgeVoice).toContain("authorizer_id      = aws_apigatewayv2_authorizer.voice_session[0].id");
+    // A catch-all route would be an unauthenticated path by omission.
+    expect(judgeVoice).not.toContain("$default\"\n  target");
+    expect(judgeVoice).not.toContain('route_key          = "$default"');
+  });
+
+  it("never publishes a Lambda Function URL for the voice path", () => {
+    expect(judgeVoice).not.toContain("aws_lambda_function_url");
+    expect(judgeVoice).not.toContain('authorization_type = "NONE"');
+  });
+
+  it("restricts the browser origin and throttles the stage", () => {
+    expect(judgeVoice).toContain("allow_origins     = [var.judge_portal_origin]");
+    expect(judgeVoice).toContain("throttling_burst_limit = 5");
+    expect(judgeVoice).toContain("throttling_rate_limit  = 2");
+  });
+});
+
+describe("the voice path grants only what it needs", () => {
+  it("scopes StartWebRTCContact to one flow on one instance", () => {
+    const statement = judgeVoice.slice(judgeVoice.indexOf("StartJudgeWebRtcContact"));
+
+    expect(statement).toContain('Action   = ["connect:StartWebRTCContact"]');
+    expect(statement).toContain("contact-flow/${aws_connect_contact_flow.judge_voice[0].contact_flow_id}");
+    expect(statement).not.toContain('"connect:*"');
+  });
+
+  it("gives the fulfilment Lambda no Connect and no telephony access", () => {
+    const policy = judgeVoice.slice(
+      judgeVoice.indexOf('resource "aws_iam_role_policy" "judge_voice"'),
+      judgeVoice.indexOf('resource "aws_lambda_function" "judge_voice"'),
+    );
+
+    expect(policy).toContain("dynamodb:GetItem");
+    expect(policy).not.toContain("connect:");
+    expect(policy).not.toContain("secretsmanager:");
+  });
+
+  it("bounds how many contacts one judge can start", () => {
+    expect(variableBlock("voice_sessions_per_judge_per_hour")).toContain("cost control");
+    expect(judgeVoice).toContain("VOICE_SESSIONS_PER_HOUR");
+  });
+});
+
+describe("the whole voice stack is off by default", () => {
+  it("requires the master switch and the procurement table", () => {
+    expect(judgeVoice).toContain("var.webrtc_judge_mode_enabled &&");
+    expect(judgeVoice).toContain("var.procurement_table_enabled &&");
+  });
+
+  it("is never enabled by any workflow or example configuration", () => {
+    for (const source of [
+      repoFile(".github", "workflows", "terraform-apply.yml"),
+      repoFile(".github", "workflows", "terraform-plan.yml"),
+      repoFile("infrastructure", "terraform", "example.tfvars"),
+    ]) {
+      expect(source).not.toContain("judge_auth_issuer");
+      expect(source).not.toContain("webrtc_judge_mode_enabled");
+    }
   });
 });

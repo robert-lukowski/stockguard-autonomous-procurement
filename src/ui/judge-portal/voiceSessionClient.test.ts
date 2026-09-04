@@ -10,22 +10,38 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe("reading a voice session response", () => {
-  it("accepts a started session and surfaces only the meeting id", () => {
+  it("accepts a started session and keeps only the Chime join fields", () => {
     const state = readVoiceSessionResponse({
       status: "STARTED",
       grant: {
         sessionId: "session-1",
         expiresAt: "2026-09-04T09:02:00.000Z",
         participantToken: "participant-token",
-        joinInformation: { meetingId: "meeting-1", attendeeJoinToken: "join-token" },
+        joinInformation: {
+          meetingId: "meeting-1",
+          mediaRegion: "eu-central-1",
+          attendeeId: "attendee-1",
+          attendeeJoinToken: "join-token",
+          audioHostUrl: "https://audio.invalid",
+          signalingUrl: "wss://signal.invalid",
+          turnControlUrl: "https://turn.invalid",
+          somethingElse: "ignored",
+        },
       },
     });
 
-    expect(state).toEqual({
-      status: "ready",
-      meetingId: "meeting-1",
-      expiresAt: "2026-09-04T09:02:00.000Z",
-    });
+    expect(state.status).toBe("ready");
+    if (state.status !== "ready") throw new Error("expected a grant");
+    expect(state.expiresAt).toBe("2026-09-04T09:02:00.000Z");
+    expect(Object.keys(state.grant).sort()).toEqual([
+      "attendeeId",
+      "attendeeJoinToken",
+      "audioHostUrl",
+      "mediaRegion",
+      "meetingId",
+      "signalingUrl",
+      "turnControlUrl",
+    ]);
   });
 
   it("maps every refusal reason to a message a judge can act on", () => {
@@ -55,6 +71,19 @@ describe("reading a voice session response", () => {
       { status: "STARTED" },
       { status: "STARTED", grant: {} },
       { status: "STARTED", grant: { expiresAt: "x", joinInformation: {} } },
+      {
+        status: "STARTED",
+        grant: {
+          expiresAt: "x",
+          // Missing the three MediaPlacement endpoints the SDK needs.
+          joinInformation: {
+            meetingId: "m",
+            mediaRegion: "r",
+            attendeeId: "a",
+            attendeeJoinToken: "j",
+          },
+        },
+      },
       { status: "SOMETHING_ELSE" },
     ]) {
       expect(readVoiceSessionResponse(body).status).not.toBe("ready");

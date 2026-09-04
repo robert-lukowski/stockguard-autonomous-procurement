@@ -11,14 +11,18 @@
     "test": "vitest run",
     "validate:aws-bootstrap": "node scripts/validate-aws-readonly-bootstrap.mjs",
     "test:aws-inventory": "node scripts/test-aws-readonly-inventory.mjs",
-    "build:lambda": "esbuild infrastructure/terraform/lambda/supplierSimulatorHandler.ts --bundle --platform=node --target=node22 --format=cjs --outfile=infrastructure/terraform/build/supplierSimulator/index.js && esbuild infrastructure/terraform/lambda/liveCallerHandler.ts --bundle --platform=node --target=node22 --format=cjs --external:@aws-sdk/client-secrets-manager --outfile=infrastructure/terraform/build/liveCaller/index.js"
+    "build:lambda": "esbuild infrastructure/terraform/lambda/supplierSimulatorHandler.ts --bundle --platform=node --target=node22 --format=cjs --outfile=infrastructure/terraform/build/supplierSimulator/index.js && esbuild infrastructure/terraform/lambda/liveCallerHandler.ts --bundle --platform=node --target=node22 --format=cjs --external:@aws-sdk/client-secrets-manager --outfile=infrastructure/terraform/build/liveCaller/index.js && esbuild infrastructure/terraform/lambda/judgeVoiceHandler.ts --bundle --platform=node --target=node22 --format=cjs --external:@aws-sdk/* --outfile=infrastructure/terraform/build/judgeVoice/index.js && esbuild infrastructure/terraform/lambda/voiceSessionHandler.ts --bundle --platform=node --target=node22 --format=cjs --external:@aws-sdk/* --outfile=infrastructure/terraform/build/voiceSession/index.js"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1117.0",
+    "@aws-sdk/client-connect": "^3.1126.0",
+    "@aws-sdk/client-dynamodb": "^3.1126.0",
     "@aws-sdk/client-s3": "^3.1117.0",
+    "@aws-sdk/lib-dynamodb": "^3.1126.0",
     "@aws-sdk/s3-request-presigner": "^3.1117.0",
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^4.3.4",
+    "amazon-chime-sdk-js": "^3.32.0",
     "lucide-react": "^0.468.0",
     "motion": "^13.1.1",
     "react": "^19.0.0",

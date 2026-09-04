@@ -1,4 +1,5 @@
 import type { VoiceSessionRefusal } from "../../server/webrtc";
+import type { ChimeJoinGrant } from "./chimeVoiceClient";
 
 /**
  * Browser client for the protected voice-session endpoint.
@@ -19,22 +20,11 @@ export type VoiceSessionState =
   | { status: "unavailable"; message: string }
   | { status: "idle" }
   | { status: "starting" }
-  | { status: "ready"; meetingId: string; expiresAt: string }
+  | { status: "ready"; grant: ChimeJoinGrant; expiresAt: string }
   | { status: "refused"; reason: VoiceSessionRefusal | "UNKNOWN"; message: string }
   | { status: "error"; message: string };
 
 /** Exactly the fields the portal reads back. Anything else is ignored. */
-export type VoiceSessionResponse =
-  | {
-      status: "STARTED";
-      grant: {
-        sessionId: string;
-        expiresAt: string;
-        joinInformation: { meetingId: string };
-      };
-    }
-  | { status: "REFUSED"; reason: VoiceSessionRefusal; message: string };
-
 const refusalMessages: Record<VoiceSessionRefusal, string> = {
   DISABLED: "Browser voice is disabled in this deployment.",
   IDENTITY_MISSING: "You are not signed in, so no voice session can be started.",
@@ -80,15 +70,36 @@ export function readVoiceSessionResponse(body: unknown): VoiceSessionState {
   }
   const typed = grant as Record<string, unknown>;
   const join = typed.joinInformation;
-  const meetingId =
-    typeof join === "object" && join !== null
-      ? (join as Record<string, unknown>).meetingId
-      : undefined;
-
-  if (typeof meetingId !== "string" || typeof typed.expiresAt !== "string") {
+  if (typeof join !== "object" || join === null || typeof typed.expiresAt !== "string") {
     return { status: "error", message: "The voice service returned incomplete join information." };
   }
-  return { status: "ready", meetingId, expiresAt: typed.expiresAt };
+
+  /*
+   * Every field the Chime SDK needs is required. A partially-populated grant
+   * would fail deep inside the SDK with an opaque error, so it is rejected
+   * here where the message can still say something useful.
+   */
+  const fields = join as Record<string, unknown>;
+  const required = [
+    "meetingId",
+    "mediaRegion",
+    "attendeeId",
+    "attendeeJoinToken",
+    "audioHostUrl",
+    "signalingUrl",
+    "turnControlUrl",
+  ] as const;
+  if (required.some((field) => typeof fields[field] !== "string" || fields[field] === "")) {
+    return { status: "error", message: "The voice service returned incomplete join information." };
+  }
+
+  return {
+    status: "ready",
+    expiresAt: typed.expiresAt,
+    grant: Object.fromEntries(
+      required.map((field) => [field, fields[field] as string]),
+    ) as unknown as ChimeJoinGrant,
+  };
 }
 
 export async function startVoiceSession(
