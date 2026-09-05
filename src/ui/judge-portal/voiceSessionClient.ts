@@ -1,5 +1,6 @@
 import type { VoiceSessionRefusal } from "../../server/webrtc";
 import type { ChimeJoinGrant } from "./chimeVoiceClient";
+import { judgeAuthorizationHeader } from "./judgeSession";
 
 /**
  * Browser client for the protected voice-session endpoint.
@@ -11,9 +12,12 @@ import type { ChimeJoinGrant } from "./chimeVoiceClient";
  *
  * Deliberately absent, and each absence is a property:
  *   - no AWS SDK, no region, no role, no credential;
- *   - no `judgeId` in the request body. The endpoint reads identity from the
- *     authenticated session, so a caller cannot name their own judge id and
- *     reset their own rate limit.
+ *   - no `judgeId` in the request body. The endpoint's Lambda authorizer reads
+ *     identity from the opaque session token, so a caller cannot name their own
+ *     judge id and reset their own rate limit.
+ *
+ * The bearer token is attached from `judgeSession`, which holds it in module
+ * scope. It is never read from storage, a cookie or a URL.
  */
 
 export type VoiceSessionState =
@@ -27,7 +31,7 @@ export type VoiceSessionState =
 /** Exactly the fields the portal reads back. Anything else is ignored. */
 const refusalMessages: Record<VoiceSessionRefusal, string> = {
   DISABLED: "Browser voice is disabled in this deployment.",
-  IDENTITY_MISSING: "You are not signed in, so no voice session can be started.",
+  IDENTITY_MISSING: "Enter the judge access code before starting a voice session.",
   SESSION_EXPIRED: "This procurement session has expired. Start a new one.",
   RATE_LIMITED: "You have started too many voice sessions recently. Try again later.",
   GRANT_ALREADY_ISSUED: "A voice session is already open for this mission.",
@@ -107,15 +111,25 @@ export async function startVoiceSession(
   sessionId: string,
   missionId: string,
   fetchImplementation: typeof fetch = fetch,
+  authorization: string | null = judgeAuthorizationHeader(),
 ): Promise<VoiceSessionState> {
+  if (authorization === null) {
+    // Not signed in, or the token has expired. Say so rather than sending an
+    // unauthenticated request the API would reject anyway.
+    return {
+      status: "refused",
+      reason: "IDENTITY_MISSING",
+      message: refusalMessages.IDENTITY_MISSING,
+    };
+  }
+
   let response: Response;
   try {
     response = await fetchImplementation(endpoint, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      // Identity comes from the authenticated session, never from this body.
+      headers: { "content-type": "application/json", authorization },
+      // Identity comes from the token, never from this body.
       body: JSON.stringify({ sessionId, missionId }),
-      credentials: "include",
     });
   } catch {
     return { status: "error", message: "The voice service could not be reached." };

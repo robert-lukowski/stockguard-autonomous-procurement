@@ -97,6 +97,8 @@ describe("reading a voice session response", () => {
   });
 });
 
+const AUTHORIZATION = `Bearer ${"a".repeat(64)}`;
+
 describe("calling the protected endpoint", () => {
   it("never sends a judge identity in the request body", async () => {
     let sentBody = "";
@@ -108,6 +110,7 @@ describe("calling the protected endpoint", () => {
         sentBody = String(init?.body ?? "");
         return jsonResponse({ status: "REFUSED", reason: "DISABLED" });
       },
+      AUTHORIZATION,
     );
 
     expect(JSON.parse(sentBody)).toEqual({
@@ -123,12 +126,14 @@ describe("calling the protected endpoint", () => {
       "session-1",
       "MISSION-SSD-20",
       async () => new Response("nope", { status: 403 }),
+      AUTHORIZATION,
     );
     const throttled = await startVoiceSession(
       "https://example.invalid/voice",
       "session-1",
       "MISSION-SSD-20",
       async () => new Response("nope", { status: 429 }),
+      AUTHORIZATION,
     );
 
     expect(unauthorized).toMatchObject({ status: "refused", reason: "IDENTITY_MISSING" });
@@ -143,6 +148,7 @@ describe("calling the protected endpoint", () => {
       async () => {
         throw new Error("network down");
       },
+      AUTHORIZATION,
     );
 
     expect(state).toMatchObject({ status: "error" });
@@ -154,6 +160,7 @@ describe("calling the protected endpoint", () => {
       "session-1",
       "MISSION-SSD-20",
       async () => new Response("<html>gateway error</html>", { status: 200 }),
+      AUTHORIZATION,
     );
 
     expect(state).toMatchObject({ status: "error" });

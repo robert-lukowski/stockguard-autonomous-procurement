@@ -2,6 +2,7 @@ import {
   CheckCircle2,
   CircleSlash,
   ClipboardList,
+  KeyRound,
   Loader2,
   Mic,
   ShieldQuestion,
@@ -26,6 +27,11 @@ import {
   type VoiceCall,
   type VoiceCallState,
 } from "./chimeVoiceClient";
+import {
+  clearJudgeSession,
+  signIn,
+  type JudgeSignInState,
+} from "./judgeSession";
 
 type Phase = "idle" | "running" | "awaiting-decision" | "done";
 
@@ -55,6 +61,8 @@ export function JudgePortalPanel() {
   const [error, setError] = useState<string | null>(null);
   const [voice, setVoice] = useState<VoiceSessionState>({ status: "idle" });
   const [call, setCall] = useState<VoiceCallState>(voiceState("idle"));
+  const [accessCode, setAccessCode] = useState("");
+  const [signInState, setSignInState] = useState<JudgeSignInState>({ status: "signed-out" });
   const callRef = useRef<VoiceCall | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const channelRef = useRef<LocalTextChannel | null>(null);
@@ -144,6 +152,26 @@ export function JudgePortalPanel() {
    * posts a session id to an authenticated endpoint and renders whatever that
    * endpoint decides. Every refusal below was decided server-side.
    */
+  const endVoice = async () => {
+    await callRef.current?.stop();
+    callRef.current = null;
+  };
+
+  const submitAccessCode = async () => {
+    if (!config.loginEndpoint || accessCode.trim().length === 0) return;
+    setSignInState({ status: "signing-in" });
+    const state = await signIn(config.loginEndpoint, accessCode.trim());
+    setSignInState(state);
+    // The code has been exchanged; there is no reason to keep it on screen.
+    if (state.status === "signed-in") setAccessCode("");
+  };
+
+  const signOut = () => {
+    clearJudgeSession();
+    setSignInState({ status: "signed-out" });
+    void endVoice();
+  };
+
   const startVoice = async () => {
     const sessionId = sessionRef.current;
     const audioElement = audioRef.current;
@@ -168,11 +196,6 @@ export function JudgePortalPanel() {
     });
   };
 
-  const endVoice = async () => {
-    await callRef.current?.stop();
-    callRef.current = null;
-  };
-
   /*
    * One line, and it must always say the most specific true thing: a live call
    * state outranks the session state, which outranks the build configuration.
@@ -187,8 +210,10 @@ export function JudgePortalPanel() {
           : config.voiceStatus;
 
   const callActive = call.phase === "connected" || call.phase === "connecting";
+  const signedIn = signInState.status === "signed-in";
   const canStartVoice =
     config.webRtcEnabled &&
+    signedIn &&
     phase !== "idle" &&
     !callActive &&
     voice.status !== "starting" &&
@@ -243,6 +268,59 @@ export function JudgePortalPanel() {
           </span>
         )}
       </div>
+      {config.webRtcEnabled ? (
+        <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-ground-700/50 px-3 py-2 text-xs">
+          <KeyRound aria-hidden="true" className="size-3.5 text-ground-500" />
+          {signedIn ? (
+            <>
+              <span className="text-ground-400">
+                Signed in as a judge. The access code is not stored.
+              </span>
+              <button
+                type="button"
+                onClick={signOut}
+                className="ml-auto rounded-md border border-ground-700/60 px-2.5 py-1 text-ground-300"
+              >
+                Sign out
+              </button>
+            </>
+          ) : (
+            <>
+              <label htmlFor="judge-access-code" className="text-ground-400">
+                Judge access code
+              </label>
+              <input
+                id="judge-access-code"
+                type="password"
+                value={accessCode}
+                autoComplete="off"
+                disabled={signInState.status === "signing-in"}
+                onChange={(changed) => setAccessCode(changed.target.value)}
+                onKeyDown={(pressed) => {
+                  if (pressed.key === "Enter") void submitAccessCode();
+                }}
+                className="w-56 rounded-md border border-ground-700/60 bg-ground-900/60 px-2 py-1 text-ground-100"
+              />
+              <button
+                type="button"
+                onClick={submitAccessCode}
+                disabled={
+                  signInState.status === "signing-in" || accessCode.trim().length === 0
+                }
+                className="rounded-md border border-ground-700/60 px-2.5 py-1 text-ground-300 disabled:opacity-50"
+              >
+                {signInState.status === "signing-in" ? "Checking..." : "Sign in"}
+              </button>
+              {signInState.status === "failed" ? (
+                <span role="alert" className="text-ground-300">
+                  {signInState.message}
+                </span>
+              ) : null}
+            </>
+          )}
+        </div>
+      ) : null}
+
       {/* Bound by the Chime SDK. Never autoplays: audio starts only once the
           judge has explicitly started a session and granted the microphone. */}
       <audio ref={audioRef} className="hidden" />
