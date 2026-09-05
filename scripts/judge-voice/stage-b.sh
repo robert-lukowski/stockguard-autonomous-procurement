@@ -63,8 +63,12 @@ terraform plan -input=false -out=stage-b.tfplan \
   -var 'procurement_table_enabled=true' \
   -var 'connect_judge_flow_enabled=true'
 
-# Stage B should create the flow and update the session Lambda in place.
-# planGuard rejects any action array containing "delete", so a REPLACEMENT
+# Stage B should leave the flow in place and update the session Lambda.
+# planGuard checks the flow against the plan's resulting state rather than
+# against a "create" action, so re-running this script after a partial apply
+# works - by then the flow exists and is a no-op.
+#
+# It rejects any action array containing "delete", so a REPLACEMENT
 # (["delete","create"]) is caught too - destroying a live API to recreate it
 # is not something to wave through on the way to a demo.
 echo
