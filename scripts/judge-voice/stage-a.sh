@@ -12,7 +12,12 @@
 # would have surfaced only here. A green CI run does not tell you this works.
 #
 # USAGE
-#   scripts/judge-voice/stage-a.sh --access-code-file /path/to/code
+#   scripts/judge-voice/stage-a.sh --instance-id "$AWS_CONNECT_INSTANCE_ID"
+#
+# --instance-id is required: var.connect_instance_id has no default, so a plan
+# without it either fails under -input=false or silently uses whatever a
+# tfvars file happens to hold. It is passed to Terraform explicitly so the
+# instance this script targets is the instance it deploys to.
 #
 # The access code is read from a file (or a TTY prompt) so it never lands in
 # shell history or the process list.
@@ -21,6 +26,7 @@ set -euo pipefail
 export AWS_PAGER=""
 
 REGION="${AWS_REGION:-eu-central-1}"
+INSTANCE_ID="${AWS_CONNECT_INSTANCE_ID:-}"
 ACCESS_CODE_FILE=""
 SKIP_BUILD="false"
 TF_DIR="infrastructure/terraform"
@@ -28,9 +34,10 @@ TF_DIR="infrastructure/terraform"
 while [ $# -gt 0 ]; do
   case "$1" in
     --region) REGION="${2:?--region needs a value}"; shift 2 ;;
+    --instance-id) INSTANCE_ID="${2:?--instance-id needs a value}"; shift 2 ;;
     --access-code-file) ACCESS_CODE_FILE="${2:?--access-code-file needs a path}"; shift 2 ;;
     --skip-build) SKIP_BUILD="true"; shift ;;
-    -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
     *) echo "unrecognized argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -38,8 +45,11 @@ done
 command -v aws >/dev/null || { echo "aws CLI not found" >&2; exit 1; }
 command -v terraform >/dev/null || { echo "terraform not found" >&2; exit 1; }
 command -v curl >/dev/null || { echo "curl not found" >&2; exit 1; }
+command -v node >/dev/null || { echo "node not found" >&2; exit 1; }
+[ -n "$INSTANCE_ID" ] || { echo "pass --instance-id or set AWS_CONNECT_INSTANCE_ID" >&2; exit 1; }
 
-cd "$(dirname "$0")/../.."
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR/../.."
 
 FAILURES=0
 pass() { printf '  PASS  %s\n' "$1"; }
@@ -72,20 +82,17 @@ terraform init -input=false >/dev/null
 echo
 echo "==> terraform plan (Stage A)"
 terraform plan -input=false -out=stage-a.tfplan \
+  -var "aws_region=$REGION" \
+  -var "connect_instance_id=$INSTANCE_ID" \
   -var 'webrtc_judge_mode_enabled=true' \
   -var 'procurement_table_enabled=true'
 
-# A contact flow in a Stage A plan means the stage gate is not working, and
-# applying it would race the manual Lex association. Refuse rather than warn.
-if terraform show -json stage-a.tfplan \
-  | grep -q '"type":"aws_connect_contact_flow"'; then
-  echo >&2
-  echo "REFUSING: the Stage A plan contains a Connect contact flow." >&2
-  echo "connect_judge_flow_enabled should be false here. Do not apply." >&2
-  exit 1
-fi
+# planGuard reads resource_changes, not planned_values. The difference matters:
+# planned_values lists the whole resulting state, including the unconditional
+# supplier contact flow in connect.tf, so inspecting it would refuse every
+# valid Stage A plan.
 echo
-echo "    plan contains no Connect contact flow, as Stage A requires"
+terraform show -json stage-a.tfplan | node "$SCRIPT_DIR/planGuard.mjs" stage-a
 
 echo
 printf 'Review the plan above. Type APPLY to continue: '

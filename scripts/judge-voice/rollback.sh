@@ -15,18 +15,22 @@
 # deliberate manual act, not a rollback step.
 #
 # USAGE
-#   scripts/judge-voice/rollback.sh --voice-off
-#   scripts/judge-voice/rollback.sh --all
+#   scripts/judge-voice/rollback.sh --voice-off --instance-id "$AWS_CONNECT_INSTANCE_ID"
+#   scripts/judge-voice/rollback.sh --all      --instance-id "$AWS_CONNECT_INSTANCE_ID"
 
 set -euo pipefail
 export AWS_PAGER=""
 
 MODE=""
+REGION="${AWS_REGION:-eu-central-1}"
+INSTANCE_ID="${AWS_CONNECT_INSTANCE_ID:-}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --voice-off) MODE="voice-off"; shift ;;
     --all) MODE="all"; shift ;;
+    --region) REGION="${2:?--region needs a value}"; shift 2 ;;
+    --instance-id) INSTANCE_ID="${2:?--instance-id needs a value}"; shift 2 ;;
     -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
     *) echo "unrecognized argument: $1" >&2; exit 2 ;;
   esac
@@ -34,12 +38,17 @@ done
 
 [ -n "$MODE" ] || { echo "pass --voice-off or --all" >&2; exit 2; }
 command -v terraform >/dev/null || { echo "terraform not found" >&2; exit 1; }
+command -v node >/dev/null || { echo "node not found" >&2; exit 1; }
+[ -n "$INSTANCE_ID" ] || { echo "pass --instance-id or set AWS_CONNECT_INSTANCE_ID" >&2; exit 1; }
 
-cd "$(dirname "$0")/../../infrastructure/terraform"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR/../../infrastructure/terraform"
 
 if [ "$MODE" = "voice-off" ]; then
   echo "==> planning: contact flow and StartWebRTCContact removed, rest intact"
   terraform plan -input=false -out=rollback.tfplan \
+    -var "aws_region=$REGION" \
+    -var "connect_instance_id=$INSTANCE_ID" \
     -var 'webrtc_judge_mode_enabled=true' \
     -var 'procurement_table_enabled=true' \
     -var 'connect_judge_flow_enabled=false'
@@ -47,19 +56,18 @@ else
   echo "==> planning: the whole voice stack removed"
   echo "    (the DynamoDB table stays: prevent_destroy and deletion protection)"
   terraform plan -input=false -out=rollback.tfplan \
+    -var "aws_region=$REGION" \
+    -var "connect_instance_id=$INSTANCE_ID" \
     -var 'webrtc_judge_mode_enabled=false' \
     -var 'procurement_table_enabled=true'
 fi
 
-# The table must survive either mode. If a plan proposes destroying it,
-# something is wrong with the configuration, not with this rollback.
-if terraform show -json rollback.tfplan \
-  | grep -q '"type":"aws_dynamodb_table".*"actions":\["delete"\]'; then
-  echo >&2
-  echo "REFUSING: this plan would destroy the procurement table." >&2
-  echo "It holds consumed single-use tokens and audit chains." >&2
-  exit 1
-fi
+# The table must survive either mode. planGuard checks the table's own change
+# entry rather than pattern-matching across the serialized plan, where a `.*`
+# spans the whole single-line document and matches things that are nowhere
+# near each other.
+echo
+terraform show -json rollback.tfplan | node "$SCRIPT_DIR/planGuard.mjs" rollback
 
 echo
 printf 'Review the plan above. Type ROLLBACK to continue: '

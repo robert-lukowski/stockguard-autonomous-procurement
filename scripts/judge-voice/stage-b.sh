@@ -28,9 +28,11 @@ done
 
 command -v aws >/dev/null || { echo "aws CLI not found" >&2; exit 1; }
 command -v terraform >/dev/null || { echo "terraform not found" >&2; exit 1; }
+command -v node >/dev/null || { echo "node not found" >&2; exit 1; }
 [ -n "$INSTANCE_ID" ] || { echo "pass --instance-id or set AWS_CONNECT_INSTANCE_ID" >&2; exit 1; }
 
-cd "$(dirname "$0")/../../infrastructure/terraform"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR/../../infrastructure/terraform"
 
 # ---------------------------------------------------------------------------
 # The precondition, checked rather than assumed.
@@ -52,30 +54,25 @@ echo "==> the Lex association is in place"
 # ---------------------------------------------------------------------------
 echo
 echo "==> terraform plan (Stage B)"
+# The same instance and region the association was just verified against, so
+# the plan cannot target a different one and defeat the guard above.
 terraform plan -input=false -out=stage-b.tfplan \
+  -var "aws_region=$REGION" \
+  -var "connect_instance_id=$INSTANCE_ID" \
   -var 'webrtc_judge_mode_enabled=true' \
   -var 'procurement_table_enabled=true' \
   -var 'connect_judge_flow_enabled=true'
 
-# Stage B should create the flow and update two things on the session Lambda.
-# Anything destructive means state has drifted since Stage A, and applying
-# blind would be the wrong response.
-if terraform show -json stage-b.tfplan | grep -q '"actions":\["delete"\]'; then
-  echo >&2
-  echo "REFUSING: the Stage B plan deletes something." >&2
-  echo "Stage B should only create the contact flow and update the session" >&2
-  echo "Lambda. Investigate the drift before applying." >&2
-  exit 1
-fi
-
-if ! terraform show -json stage-b.tfplan | grep -q '"type":"aws_connect_contact_flow"'; then
-  echo >&2
-  echo "REFUSING: the Stage B plan does not create a contact flow." >&2
-  echo "connect_judge_flow_enabled may not have taken effect." >&2
-  exit 1
-fi
+# Stage B should leave the flow in place and update the session Lambda.
+# planGuard checks the flow against the plan's resulting state rather than
+# against a "create" action, so re-running this script after a partial apply
+# works - by then the flow exists and is a no-op.
+#
+# It rejects any action array containing "delete", so a REPLACEMENT
+# (["delete","create"]) is caught too - destroying a live API to recreate it
+# is not something to wave through on the way to a demo.
 echo
-echo "    plan creates the contact flow and deletes nothing"
+terraform show -json stage-b.tfplan | node "$SCRIPT_DIR/planGuard.mjs" stage-b
 
 echo
 echo "After this apply the voice path is LIVE. Each judge session starts a"
