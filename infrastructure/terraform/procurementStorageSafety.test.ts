@@ -107,31 +107,119 @@ describe("no in-memory adapter is described as a durable control", () => {
 const judgeVoice = repoFile("infrastructure", "terraform", "judge-voice.tf");
 
 describe("the voice session endpoint cannot exist unauthenticated", () => {
-  it("cannot be created without a JWT issuer and audience", () => {
-    // Structural, not advisory: every voice resource carries this count.
-    expect(judgeVoice).toContain("length(trimspace(var.judge_auth_issuer)) > 0");
-    expect(judgeVoice).toContain("length(trimspace(var.judge_auth_audience)) > 0");
-    expect(variableBlock("judge_auth_issuer")).toMatch(/default\s*=\s*""/);
-    expect(variableBlock("judge_auth_audience")).toMatch(/default\s*=\s*""/);
+  it("guards its only route with the judge Lambda authorizer", () => {
+    expect(judgeVoice).toContain('route_key          = "POST /voice-sessions"');
+    expect(judgeVoice).toContain('authorization_type = "JWT"');
+    expect(judgeVoice).toContain(
+      "authorizer_id      = aws_apigatewayv2_authorizer.voice_session[0].id",
+    );
+    expect(judgeVoice).toContain('authorizer_type                   = "REQUEST"');
+    expect(judgeVoice).toContain(
+      "authorizer_uri                    = aws_lambda_function.judge_authorizer[0].invoke_arn",
+    );
   });
 
-  it("attaches the authorizer to the one and only route", () => {
-    expect(judgeVoice).toContain('authorization_type = "JWT"');
-    expect(judgeVoice).toContain("authorizer_id      = aws_apigatewayv2_authorizer.voice_session[0].id");
-    // A catch-all route would be an unauthenticated path by omission.
-    expect(judgeVoice).not.toContain("$default\"\n  target");
+  it("never caches an authorization decision", () => {
+    // A cache would keep a revoked or expired token working for its lifetime,
+    // which is the whole thing a short-lived token is meant to prevent.
+    expect(judgeVoice).toContain("authorizer_result_ttl_in_seconds  = 0");
+  });
+
+  it("leaves sign-in as the only unauthenticated route, and only that one", () => {
+    const unauthenticated = judgeVoice.match(/authorization_type = "NONE"/g) ?? [];
+    expect(unauthenticated).toHaveLength(1);
+    expect(judgeVoice).toContain('route_key          = "POST /judge-sessions"');
+    // A catch-all would be an unauthenticated path by omission.
     expect(judgeVoice).not.toContain('route_key          = "$default"');
   });
 
   it("never publishes a Lambda Function URL for the voice path", () => {
     expect(judgeVoice).not.toContain("aws_lambda_function_url");
-    expect(judgeVoice).not.toContain('authorization_type = "NONE"');
   });
 
   it("restricts the browser origin and throttles the stage", () => {
     expect(judgeVoice).toContain("allow_origins     = [var.judge_portal_origin]");
     expect(judgeVoice).toContain("throttling_burst_limit = 5");
     expect(judgeVoice).toContain("throttling_rate_limit  = 2");
+  });
+});
+
+describe("judge sign-in uses the existing PBKDF2 access-code path", () => {
+  it("reads the digest from a manually created Secrets Manager secret", () => {
+    expect(judgeVoice).toContain('data "aws_secretsmanager_secret" "judge_access_code"');
+    expect(variableBlock("judge_access_code_secret_name")).toContain("Created MANUALLY");
+    expect(variableBlock("judge_access_code_secret_name")).toContain("PBKDF2-SHA256");
+  });
+
+  it("commits no access code, digest or session token", () => {
+    // The variable description names the schema fields on purpose; what must
+    // never appear is a VALUE assigned to one of them.
+    for (const source of [judgeVoice, variables, repoFile(".github", "workflows", "deploy-pages.yml")]) {
+      expect(source).not.toMatch(/(derivedKeyBase64|saltBase64)\s*[:=]\s*["'][A-Za-z0-9+/]{8}/);
+      expect(source).not.toMatch(/JUDGE_ACCESS_CODE\s*[:=]\s*["'][^"'$]/);
+      expect(source).not.toMatch(/accessCode\s*[:=]\s*["'][^"'$]/);
+    }
+  });
+
+  it("gives the auth Lambdas read-only access to that one secret and no Connect", () => {
+    const policy = judgeVoice.slice(
+      judgeVoice.indexOf('resource "aws_iam_role_policy" "judge_auth"'),
+      judgeVoice.indexOf('data "archive_file" "judge_login"'),
+    );
+
+    expect(policy).toContain('Action   = ["secretsmanager:GetSecretValue"]');
+    expect(policy).toContain(
+      "Resource = data.aws_secretsmanager_secret.judge_access_code[0].arn",
+    );
+    expect(policy).not.toContain("secretsmanager:PutSecretValue");
+    expect(policy).not.toContain("connect:");
+    expect(policy).not.toContain("dynamodb:Scan");
+  });
+
+  it("bounds sign-in attempts and session lifetime", () => {
+    expect(variableBlock("judge_login_attempts_per_window")).toContain("ground down");
+    expect(variableBlock("judge_session_ttl_minutes")).toContain("worthless soon after");
+    expect(judgeVoice).toContain("LOGIN_ATTEMPTS_PER_WINDOW");
+    expect(judgeVoice).toContain("JUDGE_SESSION_TTL_MS");
+  });
+});
+
+describe("Pages configuration carries no secret", () => {
+  it("passes only flags and URLs to the build", () => {
+    const pages = repoFile(".github", "workflows", "deploy-pages.yml");
+    const viteVars = pages.match(/VITE_[A-Z_]+/g) ?? [];
+
+    expect(viteVars).toContain("VITE_WEBRTC_JUDGE_MODE");
+    expect(viteVars).toContain("VITE_WEBRTC_SESSION_URL");
+    expect(viteVars).toContain("VITE_JUDGE_LOGIN_URL");
+    for (const name of viteVars) {
+      expect(name).not.toMatch(/CODE|TOKEN|SECRET|PIN|KEY|PASSWORD/);
+    }
+    // Repository VARIABLES, never secrets: these values are public by design.
+    expect(pages).not.toMatch(/VITE_[A-Z_]+:\s*\$\{\{\s*secrets\./);
+  });
+});
+
+describe("the two deployment stages", () => {
+  it("keeps the Connect flow out of Stage A", () => {
+    expect(judgeVoice).toContain("judge_flow_enabled = local.judge_voice_enabled && var.connect_judge_flow_enabled");
+    expect(variableBlock("connect_judge_flow_enabled")).toMatch(/default\s*=\s*false/);
+    expect(variableBlock("connect_judge_flow_enabled")).toContain("STAGE B ONLY");
+
+    const flow = judgeVoice.slice(judgeVoice.indexOf('resource "aws_connect_contact_flow" "judge_voice"'));
+    expect(flow.slice(0, 300)).toContain("count = local.judge_flow_count");
+  });
+
+  it("withholds StartWebRTCContact entirely until Stage B", () => {
+    expect(judgeVoice).toContain("local.judge_flow_enabled ? [{");
+    expect(judgeVoice).toContain('Action   = ["connect:StartWebRTCContact"]');
+  });
+
+  it("leaves the session Lambda with no flow id in Stage A, so it refuses", () => {
+    expect(judgeVoice).toContain(
+      'judge_voice_flow_id = local.judge_flow_enabled ? aws_connect_contact_flow.judge_voice[0].contact_flow_id : ""',
+    );
+    expect(judgeVoice).toContain("CONNECT_WEBRTC_FLOW_ID  = local.judge_voice_flow_id");
   });
 });
 
@@ -155,6 +243,12 @@ describe("the voice path grants only what it needs", () => {
     expect(policy).not.toContain("secretsmanager:");
   });
 
+  it("no longer requires an external identity provider", () => {
+    expect(variables).not.toContain("judge_auth_issuer");
+    expect(variables).not.toContain("judge_auth_audience");
+    expect(judgeVoice).not.toContain("jwt_configuration");
+  });
+
   it("bounds how many contacts one judge can start", () => {
     expect(variableBlock("voice_sessions_per_judge_per_hour")).toContain("cost control");
     expect(judgeVoice).toContain("VOICE_SESSIONS_PER_HOUR");
@@ -163,8 +257,11 @@ describe("the voice path grants only what it needs", () => {
 
 describe("the whole voice stack is off by default", () => {
   it("requires the master switch and the procurement table", () => {
-    expect(judgeVoice).toContain("var.webrtc_judge_mode_enabled &&");
-    expect(judgeVoice).toContain("var.procurement_table_enabled &&");
+    expect(judgeVoice).toContain(
+      "judge_voice_enabled = var.webrtc_judge_mode_enabled && var.procurement_table_enabled",
+    );
+    expect(variableBlock("webrtc_judge_mode_enabled")).toMatch(/default\s*=\s*false/);
+    expect(variableBlock("procurement_table_enabled")).toMatch(/default\s*=\s*false/);
   });
 
   it("is never enabled by any workflow or example configuration", () => {
@@ -173,8 +270,8 @@ describe("the whole voice stack is off by default", () => {
       repoFile(".github", "workflows", "terraform-plan.yml"),
       repoFile("infrastructure", "terraform", "example.tfvars"),
     ]) {
-      expect(source).not.toContain("judge_auth_issuer");
       expect(source).not.toContain("webrtc_judge_mode_enabled");
+      expect(source).not.toContain("connect_judge_flow_enabled");
     }
   });
 });

@@ -187,24 +187,44 @@ variable "webrtc_judge_mode_enabled" {
   EOT
 }
 
-variable "judge_auth_issuer" {
+variable "judge_access_code_secret_name" {
   type        = string
-  default     = ""
+  default     = "stockguard/judge/access-code"
   description = <<-EOT
-    OIDC issuer URL for the Judge Portal's JWT authorizer.
+    Secrets Manager secret holding the PBKDF2-SHA256 digest of the judge access
+    code, in the schema SecretsManagerAccessCodeSecretStore validates:
+    algorithm, saltBase64, derivedKeyBase64, iterations (>= 100000).
 
-    Empty by default, and that emptiness is a security control rather than a
-    placeholder: local.judge_voice_enabled is false without it, so the session
-    API cannot be created without an authorizer. There is no configuration in
-    which the endpoint that starts a billable Amazon Connect contact is
-    reachable unauthenticated.
+    Created MANUALLY, outside Terraform. Terraform reads only its ARN; the
+    digest never enters configuration, state, or this repository, and the
+    plaintext access code exists only in the judge's hands and in the request
+    body of a sign-in call.
   EOT
 }
 
-variable "judge_auth_audience" {
-  type        = string
-  default     = ""
-  description = "OIDC audience (client id) accepted by the Judge Portal's JWT authorizer. Empty disables the voice stack."
+variable "connect_judge_flow_enabled" {
+  type        = bool
+  default     = false
+  description = <<-EOT
+    STAGE B ONLY. Creates the Amazon Connect contact flow a WebRTC judge lands
+    in, and grants the session Lambda StartWebRTCContact on it.
+
+    Defaults to false because Connect validates a flow against its Lex bot
+    association AT CREATION TIME, and that association is a manual CLI step
+    (aws_connect_bot_association is Lex V1 only,
+    hashicorp/terraform-provider-aws#30869). Terraform cannot sequence a manual
+    step, so a single-stage apply races it and fails with
+    InvalidContactFlowException - which has already happened twice on the
+    supplier flow.
+
+    Stage A (this false) creates everything the association needs: the Lex bot,
+    its locale, version and alias. The operator then builds the locale,
+    associates the alias, and verifies it. Stage B (this true) adds the flow.
+
+    While false the session Lambda still deploys, with no flow id and no
+    Connect permission, so it refuses every request rather than failing
+    mid-call.
+  EOT
 }
 
 variable "judge_portal_origin" {
@@ -227,5 +247,39 @@ variable "voice_sessions_per_judge_per_hour" {
   validation {
     condition     = var.voice_sessions_per_judge_per_hour >= 1 && var.voice_sessions_per_judge_per_hour <= 20
     error_message = "voice_sessions_per_judge_per_hour must be between 1 and 20."
+  }
+}
+
+variable "judge_session_ttl_minutes" {
+  type        = number
+  default     = 30
+  description = <<-EOT
+    How long a judge stays signed in after entering the access code.
+
+    Long enough to read the mission, start a voice session and finish the
+    conversation without re-entering the code; short enough that a token copied
+    out of a browser is worthless soon after the demo.
+  EOT
+
+  validation {
+    condition     = var.judge_session_ttl_minutes >= 5 && var.judge_session_ttl_minutes <= 120
+    error_message = "judge_session_ttl_minutes must be between 5 and 120."
+  }
+}
+
+variable "judge_login_attempts_per_window" {
+  type        = number
+  default     = 10
+  description = <<-EOT
+    Sign-in attempts allowed per source IP per 15 minutes.
+
+    The access code is the only credential, so this is what stops it being
+    ground down. Counted before verification, so a wrong code still costs an
+    attempt.
+  EOT
+
+  validation {
+    condition     = var.judge_login_attempts_per_window >= 3 && var.judge_login_attempts_per_window <= 60
+    error_message = "judge_login_attempts_per_window must be between 3 and 60."
   }
 }

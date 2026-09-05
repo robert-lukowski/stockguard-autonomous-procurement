@@ -1,29 +1,55 @@
 # ---------------------------------------------------------------------------
 # WebRTC Judge Mode: the judge speaks, StockGuard answers.
 #
-# The whole stack is created only when var.webrtc_judge_mode_enabled is true,
-# which defaults to false. It additionally requires the procurement table (the
-# orchestrator has nowhere to persist a run without it) and an OIDC issuer for
-# the session endpoint's JWT authorizer.
+# DEPLOYED IN TWO STAGES, because Amazon Connect validates a contact flow
+# against its Lex bot association at creation time, and that association is a
+# manual CLI step (aws_connect_bot_association is Lex V1 only,
+# hashicorp/terraform-provider-aws#30869). Terraform cannot sequence a manual
+# step, so a single apply races it and fails with InvalidContactFlowException.
 #
-# That last condition is structural, not advisory: `local.judge_voice_enabled`
-# is false whenever the issuer or audience is unset, so THERE IS NO WAY TO
-# CREATE THIS API WITHOUT AN AUTHORIZER. The one endpoint that can start a
-# billable Amazon Connect contact cannot exist unauthenticated.
+#   Stage A  webrtc_judge_mode_enabled = true
+#            DynamoDB, both auth Lambdas, the session Lambda, the HTTP API and
+#            its Lambda authorizer, the Lex bot, locale, version and alias.
+#            NO Connect flow.
+#
+#   bridge   build the Lex locale, wait for Built, associate the alias with the
+#            Connect instance, verify. See docs/webrtc-first-voice-runbook.md.
+#
+#   Stage B  connect_judge_flow_enabled = true
+#            The Connect judge flow, and StartWebRTCContact scoped to it.
+#
+# Authentication is the repository's own Judge Mode security, not an external
+# identity provider: a judge types the access code printed on the submission,
+# the login Lambda verifies it against a PBKDF2 digest in Secrets Manager, and
+# issues a short-lived opaque token. The API's Lambda authorizer resolves that
+# token to a server-minted judgeId. There is no route without the authorizer,
+# so the endpoint that starts a billable contact cannot exist unauthenticated.
 # ---------------------------------------------------------------------------
 locals {
-  judge_voice_enabled = (
-    var.webrtc_judge_mode_enabled &&
-    var.procurement_table_enabled &&
-    length(trimspace(var.judge_auth_issuer)) > 0 &&
-    length(trimspace(var.judge_auth_audience)) > 0
-  )
-  judge_voice_count       = local.judge_voice_enabled ? 1 : 0
+  # Stage A. Everything that does not touch Amazon Connect.
+  judge_voice_enabled = var.webrtc_judge_mode_enabled && var.procurement_table_enabled
+  judge_voice_count   = local.judge_voice_enabled ? 1 : 0
+
+  # Stage B. Additionally requires the manual Lex association to have happened.
+  judge_flow_enabled = local.judge_voice_enabled && var.connect_judge_flow_enabled
+  judge_flow_count   = local.judge_flow_enabled ? 1 : 0
+
   judge_lex_alias_name    = "judge"
   judge_lex_locale_id     = "en_US"
   judge_voice_flow_name   = "${local.name_prefix}-judge-voice"
   judge_voice_table_name  = var.procurement_table_name
   judge_lex_bot_alias_arn = local.judge_voice_enabled ? "arn:aws:lex:${var.aws_region}:${var.aws_account_id}:bot-alias/${aws_lexv2models_bot.judge_voice[0].id}/${awscc_lex_bot_alias.judge_voice[0].bot_alias_id}" : ""
+
+  # Empty in Stage A, so AwsConnectWebRtcContactPort reports itself disabled
+  # and the service refuses rather than failing mid-call.
+  judge_voice_flow_id = local.judge_flow_enabled ? aws_connect_contact_flow.judge_voice[0].contact_flow_id : ""
+}
+
+# The access-code digest is created manually. Terraform reads only its ARN.
+data "aws_secretsmanager_secret" "judge_access_code" {
+  count = local.judge_voice_count
+
+  name = var.judge_access_code_secret_name
 }
 
 # ---------------------------------------------------------------------------
@@ -322,7 +348,8 @@ resource "aws_lambda_permission" "judge_lex_invoke" {
 # fulfilment returns ElicitIntent.
 # ---------------------------------------------------------------------------
 resource "aws_connect_contact_flow" "judge_voice" {
-  count = local.judge_voice_count
+  # STAGE B. Requires the manual Lex association to already exist.
+  count = local.judge_flow_count
 
   instance_id = var.connect_instance_id
   name        = local.judge_voice_flow_name
@@ -426,7 +453,7 @@ resource "aws_iam_role_policy" "voice_session" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Sid      = "WriteFunctionLogs"
         Effect   = "Allow"
@@ -445,15 +472,26 @@ resource "aws_iam_role_policy" "voice_session" {
         Resource = aws_dynamodb_table.procurement[0].arn
       },
       {
-        # Scoped to the one flow on the one instance. This grant is what makes
-        # a billable contact possible, so it names both explicitly rather than
-        # allowing StartWebRTCContact on the instance as a whole.
+        Sid    = "ReadJudgeAccessCodeDigest"
+        Effect = "Allow"
+        Action = ["secretsmanager:GetSecretValue"]
+        # The login Lambda needs it; the session Lambda shares this policy only
+        # because both run the same auth composition. Read-only, one secret.
+        Resource = data.aws_secretsmanager_secret.judge_access_code[0].arn
+      },
+      ],
+      # STAGE B ONLY. Scoped to the one flow on the one instance: this grant is
+      # what makes a billable contact possible, so it names both explicitly
+      # rather than allowing StartWebRTCContact on the instance as a whole. In
+      # Stage A it is absent entirely, so the Lambda physically cannot start a
+      # contact even if something else were misconfigured.
+      local.judge_flow_enabled ? [{
         Sid      = "StartJudgeWebRtcContact"
         Effect   = "Allow"
         Action   = ["connect:StartWebRTCContact"]
         Resource = "arn:aws:connect:${var.aws_region}:${var.aws_account_id}:instance/${var.connect_instance_id}/contact-flow/${aws_connect_contact_flow.judge_voice[0].contact_flow_id}"
-      },
-    ]
+      }] : [],
+    )
   })
 }
 
@@ -477,7 +515,7 @@ resource "aws_lambda_function" "voice_session" {
       WEBRTC_ENABLED          = "true"
       PROCUREMENT_TABLE       = local.judge_voice_table_name
       CONNECT_INSTANCE_ID     = var.connect_instance_id
-      CONNECT_WEBRTC_FLOW_ID  = aws_connect_contact_flow.judge_voice[0].contact_flow_id
+      CONNECT_WEBRTC_FLOW_ID  = local.judge_voice_flow_id
       ALLOWED_ORIGIN          = var.judge_portal_origin
       VOICE_SESSIONS_PER_HOUR = tostring(var.voice_sessions_per_judge_per_hour)
     }
@@ -501,18 +539,71 @@ resource "aws_apigatewayv2_api" "voice_session" {
   }
 }
 
+# ---------------------------------------------------------------------------
+# The Lambda authorizer.
+#
+# Resolves the opaque judge token to a server-minted judgeId and puts it in the
+# request context. voiceSessionHandler reads authorizer.lambda.judgeId and
+# nothing else, so this is the single place identity is decided.
+#
+# Caching is DISABLED. A cached authorization would keep a revoked or expired
+# token working for the cache lifetime, and the whole point of a short-lived
+# token is that it stops working promptly.
+# ---------------------------------------------------------------------------
 resource "aws_apigatewayv2_authorizer" "voice_session" {
   count = local.judge_voice_count
 
-  api_id           = aws_apigatewayv2_api.voice_session[0].id
-  authorizer_type  = "JWT"
-  identity_sources = ["$request.header.Authorization"]
-  name             = "${local.name_prefix}-judge-jwt"
+  api_id                            = aws_apigatewayv2_api.voice_session[0].id
+  authorizer_type                   = "REQUEST"
+  authorizer_uri                    = aws_lambda_function.judge_authorizer[0].invoke_arn
+  authorizer_payload_format_version = "2.0"
+  enable_simple_responses           = true
+  identity_sources                  = ["$request.header.Authorization"]
+  authorizer_result_ttl_in_seconds  = 0
+  name                              = "${local.name_prefix}-judge-token"
+}
 
-  jwt_configuration {
-    audience = [var.judge_auth_audience]
-    issuer   = var.judge_auth_issuer
-  }
+resource "aws_lambda_permission" "judge_authorizer_api" {
+  count = local.judge_voice_count
+
+  statement_id  = "AllowApiGatewayInvokeAuthorizer"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.judge_authorizer[0].function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.voice_session[0].execution_arn}/*"
+}
+
+# ---------------------------------------------------------------------------
+# Judge sign-in: the only route reachable without a token, because it issues
+# them. Rate limited per source IP inside the Lambda, and by the stage throttle
+# outside it.
+# ---------------------------------------------------------------------------
+resource "aws_apigatewayv2_route" "judge_login" {
+  count = local.judge_voice_count
+
+  api_id             = aws_apigatewayv2_api.voice_session[0].id
+  route_key          = "POST /judge-sessions"
+  target             = "integrations/${aws_apigatewayv2_integration.judge_login[0].id}"
+  authorization_type = "NONE"
+}
+
+resource "aws_apigatewayv2_integration" "judge_login" {
+  count = local.judge_voice_count
+
+  api_id                 = aws_apigatewayv2_api.voice_session[0].id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = aws_lambda_function.judge_login[0].invoke_arn
+  payload_format_version = "2.0"
+}
+
+resource "aws_lambda_permission" "judge_login_api" {
+  count = local.judge_voice_count
+
+  statement_id  = "AllowApiGatewayInvokeLogin"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.judge_login[0].function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.voice_session[0].execution_arn}/*/*"
 }
 
 resource "aws_apigatewayv2_integration" "voice_session" {
@@ -565,17 +656,17 @@ resource "aws_lambda_permission" "voice_session_api" {
 
 output "voice_session_endpoint" {
   value       = one(aws_apigatewayv2_stage.voice_session[*].invoke_url)
-  description = "Null unless WebRTC Judge Mode is enabled. Set VITE_WEBRTC_SESSION_URL to this plus /voice-sessions."
+  description = "Stage A output, the API base URL. Set the WEBRTC_SESSION_URL Pages variable to this plus voice-sessions."
 }
 
 output "judge_voice_flow_id" {
   value       = one(aws_connect_contact_flow.judge_voice[*].contact_flow_id)
-  description = "Contact flow a WebRTC judge is routed into."
+  description = "STAGE B output. Null until connect_judge_flow_enabled is true."
 }
 
 output "judge_lex_bot_alias_arn" {
   value       = local.judge_voice_enabled ? local.judge_lex_bot_alias_arn : null
-  description = "Alias ARN required by the manual Connect association step."
+  description = "Stage A output. Required by the manual Connect association in the bridge."
 }
 
 output "judge_manual_connect_association_command" {
@@ -592,4 +683,153 @@ output "judge_manual_connect_association_command" {
     "--instance-id ${var.connect_instance_id}",
     "--lex-v2-bot AliasArn=${local.judge_lex_bot_alias_arn}",
   ]) : null
+}
+
+# ---------------------------------------------------------------------------
+# The two judge-auth Lambdas.
+#
+# They share one IAM role: both run the same auth composition, both read the
+# same access-code digest, both touch the same table partition. Two roles with
+# identical policies would be two things to keep in step.
+#
+# Neither has any Connect permission. Sign-in and authorization cannot start a
+# contact, whatever else is misconfigured.
+# ---------------------------------------------------------------------------
+resource "aws_cloudwatch_log_group" "judge_auth" {
+  for_each = local.judge_voice_enabled ? toset(["judge-login", "judge-authorizer"]) : toset([])
+
+  name              = "/aws/lambda/${local.name_prefix}-${each.key}"
+  retention_in_days = var.log_retention_days
+}
+
+resource "aws_iam_role" "judge_auth" {
+  count = local.judge_voice_count
+
+  name = "${local.name_prefix}-judge-auth"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "lambda.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "judge_auth" {
+  count = local.judge_voice_count
+
+  name = "${local.name_prefix}-judge-auth-runtime"
+  role = aws_iam_role.judge_auth[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "WriteFunctionLogs"
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+        Resource = "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${local.name_prefix}-judge-*:*"
+      },
+      {
+        # Sessions are keyed by token hash, and the login limiter uses the same
+        # table. No Scan: nothing here ever enumerates sessions.
+        Sid      = "ReadWriteJudgeSessions"
+        Effect   = "Allow"
+        Action   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"]
+        Resource = aws_dynamodb_table.procurement[0].arn
+      },
+      {
+        Sid      = "ReadJudgeAccessCodeDigest"
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue"]
+        Resource = data.aws_secretsmanager_secret.judge_access_code[0].arn
+      },
+    ]
+  })
+}
+
+data "archive_file" "judge_login" {
+  count = local.judge_voice_count
+
+  type        = "zip"
+  source_dir  = "${path.module}/build/judgeLogin"
+  output_path = "${path.module}/build/judgeLogin.zip"
+}
+
+data "archive_file" "judge_authorizer" {
+  count = local.judge_voice_count
+
+  type        = "zip"
+  source_dir  = "${path.module}/build/judgeAuthorizer"
+  output_path = "${path.module}/build/judgeAuthorizer.zip"
+}
+
+locals {
+  judge_auth_environment = {
+    JUDGE_AUTH_ENABLED          = "true"
+    PROCUREMENT_TABLE           = local.judge_voice_table_name
+    JUDGE_ACCESS_CODE_SECRET_ID = local.judge_voice_enabled ? data.aws_secretsmanager_secret.judge_access_code[0].arn : ""
+    ALLOWED_ORIGIN              = var.judge_portal_origin
+    JUDGE_SESSION_TTL_MS        = tostring(var.judge_session_ttl_minutes * 60000)
+    LOGIN_ATTEMPTS_PER_WINDOW   = tostring(var.judge_login_attempts_per_window)
+  }
+}
+
+resource "aws_lambda_function" "judge_login" {
+  count = local.judge_voice_count
+
+  function_name = "${local.name_prefix}-judge-login"
+  description   = "Exchanges the judge access code for a short-lived opaque session token."
+  role          = aws_iam_role.judge_auth[0].arn
+
+  filename         = data.archive_file.judge_login[0].output_path
+  source_code_hash = data.archive_file.judge_login[0].output_base64sha256
+  handler          = "index.handler"
+  runtime          = "nodejs22.x"
+
+  # PBKDF2 at 100k+ iterations is deliberately slow; 10s is ample and bounds a
+  # request that somehow stalls reading the secret.
+  timeout     = 10
+  memory_size = 512
+
+  environment {
+    variables = local.judge_auth_environment
+  }
+
+  depends_on = [aws_cloudwatch_log_group.judge_auth]
+}
+
+resource "aws_lambda_function" "judge_authorizer" {
+  count = local.judge_voice_count
+
+  function_name = "${local.name_prefix}-judge-authorizer"
+  description   = "API Gateway authorizer: resolves an opaque judge token to a server-minted judgeId."
+  role          = aws_iam_role.judge_auth[0].arn
+
+  filename         = data.archive_file.judge_authorizer[0].output_path
+  source_code_hash = data.archive_file.judge_authorizer[0].output_base64sha256
+  handler          = "index.handler"
+  runtime          = "nodejs22.x"
+
+  # On the hot path of every API call: one hash and one point read.
+  timeout     = 5
+  memory_size = 256
+
+  environment {
+    variables = local.judge_auth_environment
+  }
+
+  depends_on = [aws_cloudwatch_log_group.judge_auth]
+}
+
+output "judge_login_endpoint" {
+  value       = local.judge_voice_enabled ? "${aws_apigatewayv2_stage.voice_session[0].invoke_url}judge-sessions" : null
+  description = "Stage A output. Set VITE_JUDGE_LOGIN_URL to this."
+}
+
+output "judge_lex_bot_id" {
+  value       = one(aws_lexv2models_bot.judge_voice[*].id)
+  description = "Stage A output. Needed by the manual locale build in the deployment bridge."
 }

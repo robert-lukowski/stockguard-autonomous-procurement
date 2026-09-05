@@ -249,6 +249,64 @@ conditional-increment pattern.
 Still not deployed: no live provider exists, `var.webrtc_judge_mode_enabled`
 defaults to false, and `DisabledConnectWebRtcContactPort` throws.
 
+## Judge authentication (revised 2026-09-05)
+
+An earlier draft required an external OIDC issuer. That was unusable: a
+hackathon judge has no way to obtain a JWT, and asking them to configure an
+identity provider defeats the point of a two-minute demo.
+
+Authentication now reuses the Judge Mode security components this repository
+already had:
+
+- the access code is verified by `Pbkdf2AccessCodeVerifier` against a
+  PBKDF2-SHA256 digest held in Secrets Manager. The digest is created manually
+  and never enters Terraform state or this repository; the plaintext code
+  exists only in the judge's hands and in the body of one sign-in request.
+- sign-in mints a 256-bit opaque token. Only its SHA-256 hash is stored, in the
+  same hashed-token pattern `JudgeBackendService` established, so a dump of the
+  table yields nothing presentable.
+- `judgeId` is minted server-side per sign-in and read back only from the API
+  Gateway authorizer context. Nothing a caller sends can influence it, so
+  nobody can adopt another judge's rate-limit bucket.
+- the token lives in browser module scope. Not localStorage, not a cookie, not
+  a URL — each of those either survives the tab, is readable by other script on
+  the origin, or ends up in a history and a server log. A reload signs the
+  judge out, which is the right trade for a 30-minute demo credential.
+
+The authorizer caches nothing (`authorizer_result_ttl_in_seconds = 0`): a
+cached decision would keep a revoked or expired token working for its lifetime,
+which is exactly what a short-lived token is meant to prevent.
+
+Sign-in is the only unauthenticated route, because it is what issues tokens. It
+is rate limited per source IP — the only key available before authentication —
+and the attempt is counted **before** verification, so a wrong code still costs
+one.
+
+The judge experience is: open the portal, type the code, click Start Voice
+Demo, allow the microphone.
+
+## Two-stage deployment (added 2026-09-05)
+
+Amazon Connect validates a contact flow against its Lex bot association at
+creation time, and that association is a manual CLI step. Terraform cannot
+sequence a manual step, so a single apply races it and fails with
+`InvalidContactFlowException` — twice already, on the supplier flow.
+
+`var.connect_judge_flow_enabled` (default `false`) makes the ordering
+mechanical rather than advisory:
+
+- **Stage A** creates DynamoDB, the four Lambdas, the HTTP API with its
+  authorizer, and the Lex bot with its locale, version and alias. The contact
+  flow cannot be created: `count` is zero.
+- **The bridge** builds the Lex locale, waits for `Built`, associates the
+  alias, and verifies it.
+- **Stage B** adds the flow and, only then, `StartWebRTCContact` scoped to it.
+
+In Stage A the session Lambda deploys with an empty flow id and no Connect
+permission at all, so `AwsConnectWebRtcContactPort` reports itself disabled and
+the service refuses cleanly instead of failing mid-call. The runbook's Stage A
+verification asserts exactly that 409.
+
 ## Deferred
 
 - Deploying the DynamoDB table and wiring a composition root that binds
