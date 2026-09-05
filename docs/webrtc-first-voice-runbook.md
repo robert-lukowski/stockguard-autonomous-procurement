@@ -6,6 +6,25 @@ Terraform has been applied, and no Amazon Connect contact has been started.
 Read [ADR 0001](./adr-0001-webrtc-judge-portal.md) first for why the
 architecture is shaped this way.
 
+## The short version
+
+Four scripts, in order. Each verifies its own result and refuses to continue if
+the previous stage did not actually work.
+
+```bash
+scripts/judge-voice/create-access-code-secret.sh
+scripts/judge-voice/stage-a.sh
+scripts/judge-voice/bridge.sh   --instance-id "$AWS_CONNECT_INSTANCE_ID"
+scripts/judge-voice/stage-b.sh  --instance-id "$AWS_CONNECT_INSTANCE_ID"
+```
+
+Nothing applies without you typing `APPLY` at a plan you have read. If
+something goes wrong: `scripts/judge-voice/rollback.sh --voice-off` stops any
+further contact immediately and leaves everything else working.
+
+The rest of this document is what those scripts do and why, for when you need
+to run a step by hand or understand a failure.
+
 ---
 
 ## What the judge does
