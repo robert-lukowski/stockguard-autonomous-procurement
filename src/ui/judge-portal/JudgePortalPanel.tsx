@@ -22,7 +22,8 @@ import { RuntimeBadge } from "../RuntimeBadge";
 import { resolveJudgePortalConfig } from "./judgePortalConfig";
 import { startVoiceSession, type VoiceSessionState } from "./voiceSessionClient";
 import {
-  startVoiceCall,
+  joinVoiceCall,
+  requestMicrophone,
   voiceState,
   type VoiceCall,
   type VoiceCallState,
@@ -173,23 +174,31 @@ export function JudgePortalPanel() {
   };
 
   const startVoice = async () => {
-    const sessionId = sessionRef.current;
     const audioElement = audioRef.current;
-    if (!config.webRtcEnabled || !config.sessionEndpoint || !sessionId || !audioElement) {
+    if (!config.webRtcEnabled || !config.sessionEndpoint || !audioElement) return;
+
+    /*
+     * Microphone FIRST, before the backend is asked for anything.
+     *
+     * Starting a voice session costs money and consumes the run's single-use
+     * grant. A judge who declines the microphone after that would have paid for
+     * a contact they cannot use, and retrying would be refused as
+     * GRANT_ALREADY_ISSUED. Establishing consent first makes a refusal free.
+     */
+    if (!(await requestMicrophone(setCall))) return;
+
+    setVoice({ status: "starting" });
+    const session = await startVoiceSession(config.sessionEndpoint, missionId);
+    setVoice(session);
+    if (session.status !== "ready") {
+      setCall(voiceState("idle"));
       return;
     }
 
-    setVoice({ status: "starting" });
-    const session = await startVoiceSession(config.sessionEndpoint, sessionId, missionId);
-    setVoice(session);
-    if (session.status !== "ready") return;
+    // The run is created by the backend, so its id comes back with the grant.
+    sessionRef.current = session.sessionId;
 
-    /*
-     * The microphone is requested only after the backend has granted a session.
-     * Prompting first would ask a judge for their microphone before knowing
-     * whether a contact could be started at all.
-     */
-    callRef.current = await startVoiceCall({
+    callRef.current = await joinVoiceCall({
       grant: session.grant,
       audioElement,
       onState: setCall,
@@ -214,7 +223,6 @@ export function JudgePortalPanel() {
   const canStartVoice =
     config.webRtcEnabled &&
     signedIn &&
-    phase !== "idle" &&
     !callActive &&
     voice.status !== "starting" &&
     call.phase !== "requesting-microphone";

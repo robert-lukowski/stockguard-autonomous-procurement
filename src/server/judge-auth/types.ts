@@ -19,7 +19,13 @@
  */
 
 export type JudgeAuthSession = {
-  /** Server-minted, opaque, per-login. Never supplied by a caller. */
+  /**
+   * Server-derived, stable per access code. Never supplied by a caller.
+   *
+   * Stable rather than per-login on purpose: the billable voice-session limiter
+   * is keyed on it, so a fresh id per sign-in would hand a code holder a fresh
+   * cost ceiling every time they signed in again.
+   */
   judgeId: string;
   /** SHA-256 of the opaque token. The token itself is never stored. */
   tokenHash: string;
@@ -59,8 +65,25 @@ export interface JudgeLoginRateLimiter {
   allow(key: string, now: Date): Promise<boolean>;
 }
 
+/**
+ * The result of checking an access code.
+ *
+ * `credentialId` is what makes the per-judge rate limit mean anything. An
+ * earlier version minted a fresh random judgeId per sign-in, so the ceiling was
+ * per LOGIN: a code holder could sign in again the moment their three contacts
+ * were spent and get a clean bucket. The identity must therefore be stable for
+ * the life of the access code.
+ *
+ * It is derived from the stored PBKDF2 digest, never from the code itself. The
+ * digest is already the secret, so a leaked identity reveals nothing, and
+ * rotating the code rotates the identity — which is the correct behaviour.
+ */
+export type AccessCodeVerification =
+  | { valid: false }
+  | { valid: true; credentialId: string };
+
 export interface AccessCodeVerifierPort {
-  verify(accessCode: string): Promise<boolean>;
+  verify(accessCode: string): Promise<AccessCodeVerification>;
 }
 
 /**

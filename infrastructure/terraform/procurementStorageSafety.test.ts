@@ -108,8 +108,11 @@ const judgeVoice = repoFile("infrastructure", "terraform", "judge-voice.tf");
 
 describe("the voice session endpoint cannot exist unauthenticated", () => {
   it("guards its only route with the judge Lambda authorizer", () => {
-    expect(judgeVoice).toContain('route_key          = "POST /voice-sessions"');
-    expect(judgeVoice).toContain('authorization_type = "JWT"');
+    expect(judgeVoice).toMatch(/route_key\s+= "POST \/voice-sessions"/);
+    // CUSTOM is how an HTTP API attaches a Lambda authorizer; JWT would be
+    // rejected at apply time and terraform validate does not catch it.
+    expect(judgeVoice).toContain('authorization_type = "CUSTOM"');
+    expect(judgeVoice).not.toContain('authorization_type = "JWT"');
     expect(judgeVoice).toContain(
       "authorizer_id      = aws_apigatewayv2_authorizer.voice_session[0].id",
     );
@@ -128,9 +131,9 @@ describe("the voice session endpoint cannot exist unauthenticated", () => {
   it("leaves sign-in as the only unauthenticated route, and only that one", () => {
     const unauthenticated = judgeVoice.match(/authorization_type = "NONE"/g) ?? [];
     expect(unauthenticated).toHaveLength(1);
-    expect(judgeVoice).toContain('route_key          = "POST /judge-sessions"');
+    expect(judgeVoice).toMatch(/route_key\s+= "POST \/judge-sessions"/);
     // A catch-all would be an unauthenticated path by omission.
-    expect(judgeVoice).not.toContain('route_key          = "$default"');
+    expect(judgeVoice).not.toMatch(/route_key\s+= "\$default"/);
   });
 
   it("never publishes a Lambda Function URL for the voice path", () => {

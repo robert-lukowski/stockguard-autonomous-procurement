@@ -309,3 +309,34 @@ describe("DynamoProcurementSessionStore item layout", () => {
     });
   });
 });
+
+describe("audit events survive concurrent batches", () => {
+  it.each(implementations)("%s keeps every event when batches share a millisecond", async (_name, build) => {
+    const store = build();
+    await store.create(session());
+
+    /*
+     * The batch-local index restarts at zero on every call, so two batches at
+     * the same instant would collide on an unconditional write and the later
+     * one would silently overwrite the earlier evidence.
+     */
+    const at = "2026-09-04T09:00:01.000Z";
+    await Promise.all([
+      store.appendAudit("session-0001", [
+        auditEvent("PRODUCT_RESOLVED", "session-0001", at, { batch: "a", step: 1 }),
+        auditEvent("QUOTE_ISSUED", "session-0001", at, { batch: "a", step: 2 }),
+      ]),
+      store.appendAudit("session-0001", [
+        auditEvent("PRODUCT_RESOLVED", "session-0001", at, { batch: "b", step: 1 }),
+        auditEvent("QUOTE_ISSUED", "session-0001", at, { batch: "b", step: 2 }),
+      ]),
+    ]);
+
+    const loaded = await store.get("session-0001");
+
+    // One SESSION_STARTED plus all four appended events. Nothing lost.
+    expect(loaded?.audit).toHaveLength(5);
+    expect(loaded?.audit.filter((event) => event.detail.batch === "a")).toHaveLength(2);
+    expect(loaded?.audit.filter((event) => event.detail.batch === "b")).toHaveLength(2);
+  });
+});

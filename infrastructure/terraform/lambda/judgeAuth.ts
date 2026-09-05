@@ -1,9 +1,12 @@
 import { AwsDynamoDocument } from "../../../src/server/aws/AwsDynamoDocument";
 import { DynamoFixedWindowRateLimiter } from "../../../src/server/judge/aws/dynamo";
-import { Pbkdf2AccessCodeVerifier } from "../../../src/server/judge/backend/accessCode";
 import { SecretsManagerAccessCodeSecretStore } from "../../../src/server/judge/aws/secrets";
 import type { SecretsManagerPort } from "../../../src/server/judge/aws/secrets";
-import { DynamoJudgeAuthStore, JudgeAuthService } from "../../../src/server/judge-auth";
+import {
+  DynamoJudgeAuthStore,
+  JudgeAuthService,
+  StableAccessCodeVerifier,
+} from "../../../src/server/judge-auth";
 
 /**
  * Shared composition for the two judge-auth Lambdas.
@@ -70,7 +73,7 @@ export function buildJudgeAuthService(): JudgeAuthService {
 
   return new JudgeAuthService({
     enabled: process.env.JUDGE_AUTH_ENABLED === "true",
-    verifier: new Pbkdf2AccessCodeVerifier(
+    verifier: new StableAccessCodeVerifier(
       new LazySecretStore(required("JUDGE_ACCESS_CODE_SECRET_ID")),
     ),
     store: new DynamoJudgeAuthStore(dynamo, tableName),

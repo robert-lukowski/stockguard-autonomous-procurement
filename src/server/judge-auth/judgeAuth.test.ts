@@ -1,14 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import { InMemoryDynamoDocument } from "../aws/inMemoryDynamoDocument";
-import { createTestAccessCodeSecret } from "../judge/backend/accessCode";
-import { Pbkdf2AccessCodeVerifier } from "../judge/backend/accessCode";
-import { StaticAccessCodeSecretStore } from "../judge/backend/accessCode";
+import {
+  createTestAccessCodeSecret,
+  StaticAccessCodeSecretStore,
+} from "../judge/backend/accessCode";
 import { sha256 } from "../../security";
 import {
   DynamoJudgeAuthStore,
   InMemoryJudgeAuthStore,
   JudgeAuthService,
+  StableAccessCodeVerifier,
   bearerToken,
   type JudgeAuthStore,
   type JudgeLoginRateLimiter,
@@ -32,22 +34,17 @@ async function service(
 ) {
   const secret = await createTestAccessCodeSecret(overrides.accessCode ?? ACCESS_CODE);
   let tokens = 0;
-  let ids = 0;
 
   return new JudgeAuthService({
     enabled: overrides.enabled ?? true,
     verifier: overrides.verifyThrows
       ? { async verify() { throw new Error("secret unavailable"); } }
-      : new Pbkdf2AccessCodeVerifier(new StaticAccessCodeSecretStore(secret)),
+      : new StableAccessCodeVerifier(new StaticAccessCodeSecretStore(secret)),
     store: overrides.store ?? new InMemoryJudgeAuthStore(),
     rateLimiter: overrides.rateLimiter ?? allowAll(),
     randomToken: () => {
       tokens += 1;
       return String(tokens).padStart(64, "0");
-    },
-    randomJudgeId: () => {
-      ids += 1;
-      return `judge-${String(ids).padStart(4, "0")}`;
     },
   });
 }
@@ -131,7 +128,7 @@ describe("judge sign-in", () => {
     expect(JSON.stringify(stored)).not.toContain(result.token);
   });
 
-  it("mints a distinct judge id per sign-in", async () => {
+  it("mints a distinct token per sign-in", async () => {
     const auth = await service();
 
     const first = await auth.login(ACCESS_CODE, "ip#1", NOW);
@@ -141,6 +138,65 @@ describe("judge sign-in", () => {
     }
 
     expect(first.token).not.toBe(second.token);
+  });
+
+  it("keeps the judge identity STABLE across sign-ins with the same code", async () => {
+    /*
+     * The billable voice-session limiter is keyed on judgeId. A fresh id per
+     * login would let a code holder empty their three-contact bucket, sign in
+     * again, and get a clean one - so the advertised hourly ceiling would only
+     * ever have been per login.
+     */
+    const store = new InMemoryJudgeAuthStore();
+    const auth = await service({ store });
+
+    const first = await auth.login(ACCESS_CODE, "ip#1", NOW);
+    const second = await auth.login(ACCESS_CODE, "ip#2", NOW);
+    if (first.status !== "AUTHENTICATED" || second.status !== "AUTHENTICATED") {
+      throw new Error("expected two tokens");
+    }
+
+    const one = await auth.authorize(`Bearer ${first.token}`, NOW);
+    const two = await auth.authorize(`Bearer ${second.token}`, NOW);
+    if (one.status !== "AUTHORIZED" || two.status !== "AUTHORIZED") {
+      throw new Error("expected both to authorize");
+    }
+
+    expect(one.judgeId).toBe(two.judgeId);
+  });
+
+  it("derives the identity from the digest, never from the access code", async () => {
+    const auth = await service();
+    const login = await auth.login(ACCESS_CODE, "ip#1", NOW);
+    if (login.status !== "AUTHENTICATED") throw new Error("expected a token");
+
+    const authorized = await auth.authorize(`Bearer ${login.token}`, NOW);
+    if (authorized.status !== "AUTHORIZED") throw new Error("expected authorization");
+
+    // An access code is short and low-entropy; an identity derived from it
+    // would be an offline oracle for the code itself.
+    expect(authorized.judgeId).not.toContain(ACCESS_CODE);
+    expect(authorized.judgeId).toMatch(/^judge-[0-9a-f]{32}$/);
+    expect(authorized.judgeId).not.toBe(await sha256(ACCESS_CODE));
+  });
+
+  it("gives a different identity to a different access code", async () => {
+    const first = await service({ accessCode: "CODE-ONE" });
+    const second = await service({ accessCode: "CODE-TWO" });
+
+    const one = await first.login("CODE-ONE", "ip#1", NOW);
+    const two = await second.login("CODE-TWO", "ip#1", NOW);
+    if (one.status !== "AUTHENTICATED" || two.status !== "AUTHENTICATED") {
+      throw new Error("expected two tokens");
+    }
+
+    const idOne = await first.authorize(`Bearer ${one.token}`, NOW);
+    const idTwo = await second.authorize(`Bearer ${two.token}`, NOW);
+    if (idOne.status !== "AUTHORIZED" || idTwo.status !== "AUTHORIZED") {
+      throw new Error("expected both to authorize");
+    }
+
+    expect(idOne.judgeId).not.toBe(idTwo.judgeId);
   });
 });
 
@@ -153,7 +209,9 @@ describe("authorizing a token", () => {
 
     const result = await auth.authorize(`Bearer ${login.token}`, NOW);
 
-    expect(result).toMatchObject({ status: "AUTHORIZED", judgeId: "judge-0001" });
+    expect(result.status).toBe("AUTHORIZED");
+    if (result.status !== "AUTHORIZED") throw new Error("expected authorization");
+    expect(result.judgeId).toMatch(/^judge-[0-9a-f]{32}$/);
   });
 
   it("accepts the scheme case-insensitively", async () => {
@@ -234,7 +292,7 @@ const stores: Array<[string, () => JudgeAuthStore]> = [
 
 describe.each(stores)("%s", (_name, build) => {
   const session = {
-    judgeId: "judge-0001",
+    judgeId: `judge-${"0".repeat(32)}`,
     tokenHash: "a".repeat(64),
     issuedAt: NOW.toISOString(),
     expiresAt: "2026-09-05T09:30:00.000Z",

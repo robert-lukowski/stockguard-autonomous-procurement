@@ -704,10 +704,15 @@ resource "aws_apigatewayv2_integration" "voice_session" {
 resource "aws_apigatewayv2_route" "voice_session" {
   count = local.judge_voice_count
 
-  api_id             = aws_apigatewayv2_api.voice_session[0].id
-  route_key          = "POST /voice-sessions"
-  target             = "integrations/${aws_apigatewayv2_integration.voice_session[0].id}"
-  authorization_type = "JWT"
+  api_id    = aws_apigatewayv2_api.voice_session[0].id
+  route_key = "POST /voice-sessions"
+  target    = "integrations/${aws_apigatewayv2_integration.voice_session[0].id}"
+
+  # CUSTOM, not JWT: on an HTTP API a Lambda (REQUEST) authorizer is attached
+  # as CUSTOM. JWT is only for the built-in JWT authorizer, which this is not.
+  # terraform validate does not catch the mismatch - it is rejected by the API
+  # at apply time.
+  authorization_type = "CUSTOM"
   authorizer_id      = aws_apigatewayv2_authorizer.voice_session[0].id
 }
 

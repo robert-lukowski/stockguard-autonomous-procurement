@@ -2,6 +2,7 @@ import { sha256 } from "../../security";
 import {
   BEARER_PREFIX,
   JUDGE_SESSION_TTL_MS,
+  type AccessCodeVerification,
   type AccessCodeVerifierPort,
   type JudgeAuthSession,
   type JudgeAuthStore,
@@ -26,7 +27,6 @@ export type JudgeAuthServiceConfig = {
   sessionTtlMs?: number;
   /** Injected in tests; production uses the Web Crypto RNG. */
   randomToken?: () => string;
-  randomJudgeId?: () => string;
 };
 
 /**
@@ -39,11 +39,6 @@ export type JudgeAuthServiceConfig = {
 function defaultRandomToken(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-function defaultRandomJudgeId(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(8));
-  return `judge-${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
 /**
@@ -64,7 +59,6 @@ export function bearerToken(header: string | undefined | null): string | null {
 export class JudgeAuthService {
   private readonly sessionTtlMs: number;
   private readonly randomToken: () => string;
-  private readonly randomJudgeId: () => string;
 
   constructor(private readonly config: JudgeAuthServiceConfig) {
     this.sessionTtlMs = config.sessionTtlMs ?? JUDGE_SESSION_TTL_MS;
@@ -72,7 +66,6 @@ export class JudgeAuthService {
       throw new Error("Judge session TTL must be a positive number of milliseconds");
     }
     this.randomToken = config.randomToken ?? defaultRandomToken;
-    this.randomJudgeId = config.randomJudgeId ?? defaultRandomJudgeId;
   }
 
   /**
@@ -112,9 +105,9 @@ export class JudgeAuthService {
       };
     }
 
-    let verified: boolean;
+    let verification: AccessCodeVerification;
     try {
-      verified = await this.config.verifier.verify(accessCode);
+      verification = await this.config.verifier.verify(accessCode);
     } catch {
       /*
        * A missing or malformed secret must not read as a valid code. Fail
@@ -127,7 +120,7 @@ export class JudgeAuthService {
       };
     }
 
-    if (!verified) {
+    if (!verification.valid) {
       return {
         status: "REJECTED",
         reason: "INVALID_ACCESS_CODE",
@@ -137,7 +130,8 @@ export class JudgeAuthService {
 
     const token = this.randomToken();
     const session: JudgeAuthSession = {
-      judgeId: this.randomJudgeId(),
+      // Stable per access code, so the voice-session ceiling survives a re-login.
+      judgeId: verification.credentialId,
       tokenHash: await sha256(token),
       issuedAt: now.toISOString(),
       expiresAt: new Date(now.getTime() + this.sessionTtlMs).toISOString(),

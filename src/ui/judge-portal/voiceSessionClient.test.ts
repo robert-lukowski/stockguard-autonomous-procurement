@@ -13,6 +13,7 @@ describe("reading a voice session response", () => {
   it("accepts a started session and keeps only the Chime join fields", () => {
     const state = readVoiceSessionResponse({
       status: "STARTED",
+      sessionId: "session-0001",
       grant: {
         sessionId: "session-1",
         expiresAt: "2026-09-04T09:02:00.000Z",
@@ -33,6 +34,7 @@ describe("reading a voice session response", () => {
     expect(state.status).toBe("ready");
     if (state.status !== "ready") throw new Error("expected a grant");
     expect(state.expiresAt).toBe("2026-09-04T09:02:00.000Z");
+    expect(state.sessionId).toBe("session-0001");
     expect(Object.keys(state.grant).sort()).toEqual([
       "attendeeId",
       "attendeeJoinToken",
@@ -70,9 +72,26 @@ describe("reading a voice session response", () => {
       {},
       { status: "STARTED" },
       { status: "STARTED", grant: {} },
-      { status: "STARTED", grant: { expiresAt: "x", joinInformation: {} } },
+      { status: "STARTED", sessionId: "s", grant: { expiresAt: "x", joinInformation: {} } },
+      // A grant with no session id: the portal has no run to report on.
       {
         status: "STARTED",
+        grant: {
+          expiresAt: "x",
+          joinInformation: {
+            meetingId: "m",
+            mediaRegion: "r",
+            attendeeId: "a",
+            attendeeJoinToken: "j",
+            audioHostUrl: "h",
+            signalingUrl: "s",
+            turnControlUrl: "t",
+          },
+        },
+      },
+      {
+        status: "STARTED",
+        sessionId: "s",
         grant: {
           expiresAt: "x",
           // Missing the three MediaPlacement endpoints the SDK needs.
@@ -104,33 +123,29 @@ describe("calling the protected endpoint", () => {
     let sentBody = "";
     await startVoiceSession(
       "https://example.invalid/voice",
-      "session-1",
       "MISSION-SSD-20",
-      async (_input, init) => {
+      async (_input: unknown, init?: RequestInit) => {
         sentBody = String(init?.body ?? "");
         return jsonResponse({ status: "REFUSED", reason: "DISABLED" });
       },
       AUTHORIZATION,
     );
 
-    expect(JSON.parse(sentBody)).toEqual({
-      sessionId: "session-1",
-      missionId: "MISSION-SSD-20",
-    });
+    // Neither an identity nor a session id: the backend owns both.
+    expect(JSON.parse(sentBody)).toEqual({ missionId: "MISSION-SSD-20" });
     expect(sentBody).not.toContain("judgeId");
+    expect(sentBody).not.toContain("sessionId");
   });
 
   it("maps auth and throttling status codes without reading a body", async () => {
     const unauthorized = await startVoiceSession(
       "https://example.invalid/voice",
-      "session-1",
       "MISSION-SSD-20",
       async () => new Response("nope", { status: 403 }),
       AUTHORIZATION,
     );
     const throttled = await startVoiceSession(
       "https://example.invalid/voice",
-      "session-1",
       "MISSION-SSD-20",
       async () => new Response("nope", { status: 429 }),
       AUTHORIZATION,
@@ -143,7 +158,6 @@ describe("calling the protected endpoint", () => {
   it("reports a network failure rather than throwing", async () => {
     const state = await startVoiceSession(
       "https://example.invalid/voice",
-      "session-1",
       "MISSION-SSD-20",
       async () => {
         throw new Error("network down");
@@ -157,7 +171,6 @@ describe("calling the protected endpoint", () => {
   it("reports an unparseable body rather than throwing", async () => {
     const state = await startVoiceSession(
       "https://example.invalid/voice",
-      "session-1",
       "MISSION-SSD-20",
       async () => new Response("<html>gateway error</html>", { status: 200 }),
       AUTHORIZATION,

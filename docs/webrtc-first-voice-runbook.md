@@ -160,13 +160,14 @@ curl -sS -o /dev/null -w '%{http_code}\n' -X POST "$(terraform output -raw judge
 # The voice route rejects an unauthenticated call.
 curl -sS -o /dev/null -w '%{http_code}\n' -X POST \
   "$(terraform output -raw voice_session_endpoint)/voice-sessions" \
-  -H 'content-type: application/json' -d '{"sessionId":"x","missionId":"MISSION-SSD-20"}'
+  -H 'content-type: application/json' -d '{"missionId":"MISSION-SSD-20"}'
 # → 401
 
 # With a token it reaches the Lambda, which refuses because Stage B has not run.
+# The body carries only a mission: the run is created server-side.
 curl -sS -X POST "$(terraform output -raw voice_session_endpoint)/voice-sessions" \
   -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
-  -d '{"sessionId":"x","missionId":"MISSION-SSD-20"}'
+  -d '{"missionId":"MISSION-SSD-20"}'
 # → 409 {"status":"REFUSED","reason":"DISABLED",...}   <- expected in Stage A
 ```
 
@@ -227,12 +228,13 @@ terraform output judge_voice_flow_id     # now non-null
 # Same authenticated call as before; now it starts a contact.
 curl -sS -X POST "$(terraform output -raw voice_session_endpoint)/voice-sessions" \
   -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
-  -d "{\"sessionId\":\"$SESSION_ID\",\"missionId\":\"MISSION-SSD-20\"}"
+  -d '{"missionId":"MISSION-SSD-20"}'
+# → {"status":"STARTED","grant":{...},"sessionId":"session-..."}
 ```
 
-> This starts a **billable Amazon Connect voice contact**. `$SESSION_ID` must be
-> a procurement session the portal actually created; an invented one returns
-> 404 and costs nothing.
+> This starts a **billable Amazon Connect voice contact**. The run is created by
+> the Lambda, so the response carries its id; an unknown mission returns 404 and
+> costs nothing.
 
 ---
 
@@ -260,13 +262,14 @@ Re-run the **Deploy demo to GitHub Pages** workflow.
 1. Open the portal. Mission card: Industrial SSD, 20 units, USD 2,500, within
    7 days.
 2. Enter the access code, **Sign in**.
-3. **Run the mission** once, to open a procurement session.
-4. **Start Voice Demo**, allow the microphone.
-5. Say *"I need twenty industrial SSD drives within a week."* Expect a spoken
+3. **Start Voice Demo**, allow the microphone. The browser asks for the
+   microphone *before* the backend starts a contact, so declining costs
+   nothing.
+4. Say *"I need twenty industrial SSD drives within a week."* Expect a spoken
    reply naming 98.00 USD per unit, 1,960.00 USD total, asking whether to
    create the purchase request.
-6. Say *"yes"*. Expect a spoken purchase-request confirmation.
-7. **End**.
+5. Say *"yes"*. Expect a spoken purchase-request confirmation.
+6. **End**.
 
 Then, in a fresh session, say *"I need forty industrial SSD drives within a
 week"*: expect a spoken refusal citing `mission_budget`, with no confirmation
@@ -293,8 +296,9 @@ offered.
 - Lex speech recognition and Polly synthesis, per utterance.
 
 Bounded by: the access code (no anonymous caller), 10 sign-in attempts per
-source IP per 15 minutes, a 30-minute session token, three contacts per judge
-per hour in DynamoDB, an API stage throttle of 2 rps / burst 5, one grant per
+source IP per 15 minutes, a 30-minute session token, three contacts per hour
+per access code in DynamoDB — the identity is derived from the stored digest,
+so signing in again does not reset the bucket — an API stage throttle of 2 rps / burst 5, one grant per
 procurement session, and a 300-second Lex idle session TTL.
 
 **No PSTN call is possible on this path.** The judge-voice Lambda holds no

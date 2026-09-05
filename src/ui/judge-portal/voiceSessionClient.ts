@@ -24,7 +24,7 @@ export type VoiceSessionState =
   | { status: "unavailable"; message: string }
   | { status: "idle" }
   | { status: "starting" }
-  | { status: "ready"; grant: ChimeJoinGrant; expiresAt: string }
+  | { status: "ready"; grant: ChimeJoinGrant; expiresAt: string; sessionId: string }
   | { status: "refused"; reason: VoiceSessionRefusal | "UNKNOWN"; message: string }
   | { status: "error"; message: string };
 
@@ -73,6 +73,15 @@ export function readVoiceSessionResponse(body: unknown): VoiceSessionState {
     return { status: "error", message: "The voice service returned no join information." };
   }
   const typed = grant as Record<string, unknown>;
+  /*
+   * The run is created by the backend, so its id arrives with the grant. The
+   * browser never names a session: an earlier design had it create the run
+   * locally, which the backend could not see.
+   */
+  const sessionId = response.sessionId;
+  if (typeof sessionId !== "string" || sessionId.length === 0) {
+    return { status: "error", message: "The voice service returned no session id." };
+  }
   const join = typed.joinInformation;
   if (typeof join !== "object" || join === null || typeof typed.expiresAt !== "string") {
     return { status: "error", message: "The voice service returned incomplete join information." };
@@ -99,6 +108,7 @@ export function readVoiceSessionResponse(body: unknown): VoiceSessionState {
 
   return {
     status: "ready",
+    sessionId,
     expiresAt: typed.expiresAt,
     grant: Object.fromEntries(
       required.map((field) => [field, fields[field] as string]),
@@ -108,7 +118,6 @@ export function readVoiceSessionResponse(body: unknown): VoiceSessionState {
 
 export async function startVoiceSession(
   endpoint: string,
-  sessionId: string,
   missionId: string,
   fetchImplementation: typeof fetch = fetch,
   authorization: string | null = judgeAuthorizationHeader(),
@@ -128,8 +137,9 @@ export async function startVoiceSession(
     response = await fetchImplementation(endpoint, {
       method: "POST",
       headers: { "content-type": "application/json", authorization },
-      // Identity comes from the token, never from this body.
-      body: JSON.stringify({ sessionId, missionId }),
+      // Identity comes from the token, and the run is created server-side, so
+      // the body carries neither.
+      body: JSON.stringify({ missionId }),
     });
   } catch {
     return { status: "error", message: "The voice service could not be reached." };

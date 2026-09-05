@@ -142,9 +142,8 @@ describe("the voice endpoint is called with the token", () => {
     let sentBody = "";
     await startVoiceSession(
       "https://example.invalid/voice-sessions",
-      "session-1",
       "MISSION-SSD-20",
-      async (_input, init) => {
+      async (_input: unknown, init?: RequestInit) => {
         sentHeaders = (init?.headers ?? {}) as Record<string, string>;
         sentBody = String(init?.body ?? "");
         return jsonResponse({ status: "REFUSED", reason: "DISABLED" });
@@ -152,11 +151,10 @@ describe("the voice endpoint is called with the token", () => {
     );
 
     expect(sentHeaders.authorization).toBe(`Bearer ${TOKEN}`);
-    expect(JSON.parse(sentBody)).toEqual({
-      sessionId: "session-1",
-      missionId: "MISSION-SSD-20",
-    });
+    // Neither an identity nor a session id: the backend owns both.
+    expect(JSON.parse(sentBody)).toEqual({ missionId: "MISSION-SSD-20" });
     expect(sentBody).not.toContain("judgeId");
+    expect(sentBody).not.toContain("sessionId");
     expect(sentBody).not.toContain(TOKEN);
   });
 
@@ -164,7 +162,6 @@ describe("the voice endpoint is called with the token", () => {
     let called = false;
     const state = await startVoiceSession(
       "https://example.invalid/voice-sessions",
-      "session-1",
       "MISSION-SSD-20",
       async () => {
         called = true;

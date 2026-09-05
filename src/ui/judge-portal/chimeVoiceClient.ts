@@ -121,26 +121,39 @@ export function meetingConfiguration(grant: ChimeJoinGrant): MeetingSessionConfi
 }
 
 /**
- * Joins the meeting, binding the microphone and the remote audio.
+ * Asks for the microphone, and nothing else.
  *
- * Permission is requested before anything else, so a judge who declines never
- * causes a Chime session to be created — and therefore never leaves a
- * half-joined attendee behind.
+ * Separate from joining ON PURPOSE. Starting a voice session costs money: the
+ * backend calls StartWebRTCContact and consumes the session's single-use
+ * grant. If permission were requested afterwards, a judge who declines would
+ * have already paid for a contact they cannot use, and retrying would be
+ * refused as GRANT_ALREADY_ISSUED. So the caller establishes consent first,
+ * and only then asks the backend for a grant.
  */
-export async function startVoiceCall(
-  options: StartVoiceCallOptions,
-): Promise<VoiceCall | null> {
-  const { grant, onState, audioElement } = options;
-
+export async function requestMicrophone(
+  onState: (state: VoiceCallState) => void,
+): Promise<boolean> {
   onState(voiceState("requesting-microphone"));
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     // The device controller opens its own stream; this one only proves consent.
     for (const track of stream.getTracks()) track.stop();
+    return true;
   } catch (error) {
     onState(classifyMicrophoneError(error));
-    return null;
+    return false;
   }
+}
+
+/**
+ * Joins the meeting, binding the microphone and the remote audio.
+ *
+ * Assumes `requestMicrophone` has already succeeded.
+ */
+export async function joinVoiceCall(
+  options: StartVoiceCallOptions,
+): Promise<VoiceCall | null> {
+  const { grant, onState, audioElement } = options;
 
   onState(voiceState("connecting"));
 

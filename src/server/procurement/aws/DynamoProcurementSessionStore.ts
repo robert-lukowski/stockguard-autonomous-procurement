@@ -37,12 +37,17 @@ import type {
  * write. Here the token IS its own item, and `attribute_not_exists(PK)` decides
  * the winner in one round trip.
  *
- * Audit sort keys carry the event timestamp plus an index rather than a
- * sequence counter. A counter would need its own read-modify-write and could
- * collide; a timestamp-ordered key needs neither, and ISO-8601 sorts
- * lexicographically in the order it happened. The hash chain is built at read
- * time from that order, so ordering is what has to be right, not a stored
- * number.
+ * Audit sort keys carry the event timestamp, a batch-local index and a random
+ * suffix, rather than a sequence counter. A counter would need its own
+ * read-modify-write and could collide; ISO-8601 sorts lexicographically in the
+ * order things happened, so a timestamp-ordered key needs neither.
+ *
+ * The random suffix exists because the index restarts at zero on every
+ * `appendAudit` call. Two batches whose events share a millisecond would
+ * otherwise produce the same key, and these are unconditional writes, so the
+ * later batch would silently overwrite earlier audit evidence and leave an
+ * incomplete hash chain. Ordering within one millisecond is then arbitrary,
+ * which is acceptable; losing an event is not.
  */
 
 const METADATA_SK = "METADATA";
@@ -61,6 +66,12 @@ function epochSeconds(isoDate: string): number {
 
 function paddedIndex(index: number): string {
   return String(index).padStart(4, "0");
+}
+
+/** Enough entropy that two same-millisecond batches cannot collide. */
+function uniqueSuffix(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(6));
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 /**
@@ -211,12 +222,13 @@ export class DynamoProcurementSessionStore implements ProcurementSessionStore {
   async appendAudit(sessionId: string, events: ProcurementAuditEvent[]): Promise<void> {
     if (events.length === 0) return;
     const expiresAtEpoch = await this.requireSessionTtl(sessionId);
+    const batch = uniqueSuffix();
     for (const [index, event] of events.entries()) {
       await this.client.execute({
         operation: "Put",
         tableName: this.tableName,
         item: {
-          ...key(sessionId, `AUDIT#${event.at}#${paddedIndex(index)}`),
+          ...key(sessionId, `AUDIT#${event.at}#${paddedIndex(index)}#${batch}`),
           entityType: "ProcurementAuditEvent",
           sessionId,
           payload: structuredClone(event),

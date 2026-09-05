@@ -9,8 +9,9 @@ import { judgeIdFrom, readStartRequest } from "./voiceSessionHandler";
  *
  *   1. identity comes from the authorizer and NOWHERE else. A caller who could
  *      name their own judge id could also reset their own rate limit.
- *   2. the body may carry exactly two fields, both shape-checked, so nothing
- *      the caller sends can widen what the request means.
+ *   2. the body may carry exactly ONE field, shape-checked, so nothing the
+ *      caller sends can widen what the request means. The procurement run is
+ *      created server-side, so a caller cannot name a session id either.
  */
 
 describe("judge identity comes only from the authorizer", () => {
@@ -30,23 +31,20 @@ describe("judge identity comes only from the authorizer", () => {
     ).toBe("judge-2");
   });
 
-  it("ignores a judgeId supplied in the request body", () => {
+  it("ignores a judgeId or sessionId supplied in the request body", () => {
     const event = {
       body: JSON.stringify({
-        sessionId: "session-1",
         missionId: "MISSION-SSD-20",
         judgeId: "judge-impersonated",
+        sessionId: "session-someone-elses",
       }),
       requestContext: { http: { method: "POST" } },
     };
 
     // No authorizer context: the handler must see no identity at all.
     expect(judgeIdFrom(event)).toBe("");
-    // ...and the body parser must not carry the extra field forward.
-    expect(readStartRequest(event)).toEqual({
-      sessionId: "session-1",
-      missionId: "MISSION-SSD-20",
-    });
+    // ...and the body parser carries neither extra field forward.
+    expect(readStartRequest(event)).toEqual({ missionId: "MISSION-SSD-20" });
   });
 
   it("treats a blank or non-string claim as no identity", () => {
@@ -57,24 +55,20 @@ describe("judge identity comes only from the authorizer", () => {
   });
 });
 
-describe("the request body accepts two fields and nothing else", () => {
+describe("the request body accepts one field and nothing else", () => {
   it("accepts a well-formed body", () => {
     expect(
-      readStartRequest({
-        body: JSON.stringify({ sessionId: "session-abc_1", missionId: "MISSION-SSD-20" }),
-      }),
-    ).toEqual({ sessionId: "session-abc_1", missionId: "MISSION-SSD-20" });
+      readStartRequest({ body: JSON.stringify({ missionId: "MISSION-SSD-20" }) }),
+    ).toEqual({ missionId: "MISSION-SSD-20" });
   });
 
   it("decodes a base64 body", () => {
     expect(
       readStartRequest({
-        body: Buffer.from(
-          JSON.stringify({ sessionId: "session-1", missionId: "MISSION-SSD-20" }),
-        ).toString("base64"),
+        body: Buffer.from(JSON.stringify({ missionId: "MISSION-SSD-20" })).toString("base64"),
         isBase64Encoded: true,
       }),
-    ).toEqual({ sessionId: "session-1", missionId: "MISSION-SSD-20" });
+    ).toEqual({ missionId: "MISSION-SSD-20" });
   });
 
   it("rejects anything malformed rather than defaulting", () => {
@@ -84,15 +78,14 @@ describe("the request body accepts two fields and nothing else", () => {
       "not json",
       "[]",
       "null",
-      JSON.stringify({ missionId: "MISSION-SSD-20" }),
-      JSON.stringify({ sessionId: "session-1" }),
-      JSON.stringify({ sessionId: "", missionId: "MISSION-SSD-20" }),
-      JSON.stringify({ sessionId: 1, missionId: "MISSION-SSD-20" }),
+      JSON.stringify({}),
+      JSON.stringify({ missionId: "" }),
+      JSON.stringify({ missionId: 1 }),
       // Injection-shaped values must not reach a DynamoDB key.
-      JSON.stringify({ sessionId: "session-1/../other", missionId: "MISSION-SSD-20" }),
-      JSON.stringify({ sessionId: "PSESSION#other", missionId: "MISSION-SSD-20" }),
-      JSON.stringify({ sessionId: "s".repeat(200), missionId: "MISSION-SSD-20" }),
-      JSON.stringify({ sessionId: "session-1", missionId: "mission with spaces" }),
+      JSON.stringify({ missionId: "MISSION/../other" }),
+      JSON.stringify({ missionId: "PSESSION#other" }),
+      JSON.stringify({ missionId: "m".repeat(100) }),
+      JSON.stringify({ missionId: "mission with spaces" }),
     ]) {
       expect(readStartRequest({ body })).toBeNull();
     }

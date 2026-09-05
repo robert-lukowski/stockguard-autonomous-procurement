@@ -1,6 +1,9 @@
 import { AwsDynamoDocument } from "../../../src/server/aws/AwsDynamoDocument";
 import { DynamoFixedWindowRateLimiter } from "../../../src/server/judge/aws/dynamo";
+import { findMission } from "../../../src/server/procurement";
+import { ProcurementOrchestrator } from "../../../src/server/procurement";
 import { DynamoProcurementSessionStore } from "../../../src/server/procurement/aws";
+import { EmbeddedMetricFormatSink } from "../../../src/server/procurement/metrics";
 import { AwsConnectWebRtcContactPort } from "../../../src/server/webrtc/AwsConnectWebRtcContactPort";
 import { DynamoVoiceSessionStore } from "../../../src/server/webrtc/aws/DynamoVoiceSessionStore";
 import {
@@ -15,15 +18,23 @@ import {
  * This is the only route from a browser to Amazon Connect, and it is why the
  * browser never needs an AWS credential.
  *
- * The request body may contain exactly two things: `sessionId` and `missionId`.
+ * The request body may contain exactly one thing: `missionId`.
+ *
+ * The PROCUREMENT SESSION IS CREATED HERE, server-side, and its id is returned
+ * with the grant. An earlier design had the browser create a run and post its
+ * id, which could not work: the portal's run lived in that browser's in-memory
+ * store, so this Lambda's DynamoDB lookup found nothing and every request was
+ * refused. Owning the run here also means a caller cannot name a session id at
+ * all, so there is nothing to guess or collide with.
+ *
  * `judgeId` comes from the API Gateway authorizer, never from the body — a
  * caller who could name their own judge id could also reset their own rate
  * limit. If the authorizer produced no identity, the request is refused: an
  * unauthenticated path to a billable contact is the one failure mode that must
  * not exist.
  *
- * The response carries only the projected grant `VoiceSessionService` built.
- * The raw Connect response never leaves the Lambda.
+ * The response carries only the projected grant `VoiceSessionService` built,
+ * plus the session id. The raw Connect response never leaves the Lambda.
  */
 
 type HttpEvent = {
@@ -88,10 +99,8 @@ export function judgeIdFrom(event: HttpEvent): string {
   return "";
 }
 
-/** Accepts the two permitted fields and nothing else. */
-export function readStartRequest(
-  event: HttpEvent,
-): { sessionId: string; missionId: string } | null {
+/** Accepts the one permitted field and nothing else. */
+export function readStartRequest(event: HttpEvent): { missionId: string } | null {
   if (typeof event.body !== "string" || event.body.length === 0) return null;
   const raw = event.isBase64Encoded
     ? Buffer.from(event.body, "base64").toString("utf8")
@@ -105,16 +114,15 @@ export function readStartRequest(
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
 
-  const body = parsed as Record<string, unknown>;
-  const sessionId = body.sessionId;
-  const missionId = body.missionId;
-  if (typeof sessionId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(sessionId)) {
-    return null;
-  }
+  const missionId = (parsed as Record<string, unknown>).missionId;
   if (typeof missionId !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(missionId)) {
     return null;
   }
-  return { sessionId, missionId };
+  /*
+   * Shape-checked here, and checked against the closed mission list below. A
+   * mission the server does not know is refused before anything is created.
+   */
+  return { missionId };
 }
 
 function contactPort(): ConnectWebRtcContactPort {
@@ -136,13 +144,16 @@ function contactPort(): ConnectWebRtcContactPort {
 
 type VoiceSessionDependencies = {
   service: VoiceSessionService;
-  procurement: DynamoProcurementSessionStore;
+  /** Creates and owns the procurement run this voice contact belongs to. */
+  orchestrator: ProcurementOrchestrator;
   now: () => Date;
 };
 
 function buildDependencies(): VoiceSessionDependencies {
   const tableName = required("PROCUREMENT_TABLE");
   const dynamo = new AwsDynamoDocument({ region: optional("AWS_REGION") || undefined });
+
+  const sessions = new DynamoProcurementSessionStore(dynamo, tableName);
 
   return {
     service: new VoiceSessionService({
@@ -156,7 +167,13 @@ function buildDependencies(): VoiceSessionDependencies {
         60 * 60 * 1000,
       ),
     }),
-    procurement: new DynamoProcurementSessionStore(dynamo, tableName),
+    orchestrator: new ProcurementOrchestrator({
+      sessions,
+      // EMF on stdout: CloudWatch extracts the metrics, so no AWS call and no
+      // SDK client on the path of a request that is about to start a contact.
+      metrics: new EmbeddedMetricFormatSink(),
+      channel: "connect-webrtc",
+    }),
     now: () => new Date(),
   };
 }
@@ -193,27 +210,28 @@ export function createHandler(overrides: Partial<VoiceSessionDependencies> = {})
       dependencies ??= buildDependencies();
       const resolved = { ...dependencies, ...overrides };
 
-      /*
-       * The procurement session is the authority on expiry. Reading it here
-       * means a voice contact can never outlive the run it belongs to, and a
-       * session id the caller invented resolves to nothing.
-       */
-      const session = await resolved.procurement.get(request.sessionId);
-      if (!session) {
+      if (!findMission(request.missionId)) {
         return json(
           404,
           {
             status: "REFUSED",
             reason: "SESSION_EXPIRED",
-            message: "That procurement session does not exist.",
+            message: "That mission does not exist.",
           },
           origin,
         );
       }
 
+      /*
+       * Create the run first. Its expiry is then the authority on how long the
+       * voice contact may live, so a contact can never outlive the run it
+       * belongs to.
+       */
+      const session = await resolved.orchestrator.startSession(request.missionId);
+
       const result = await resolved.service.start({
         judgeId,
-        sessionId: request.sessionId,
+        sessionId: session.sessionId,
         missionId: session.missionId,
         procurementSessionExpiresAt: session.expiresAt,
         now: resolved.now(),
@@ -223,7 +241,7 @@ export function createHandler(overrides: Partial<VoiceSessionDependencies> = {})
         console.log(
           JSON.stringify({
             event: "VOICE_SESSION_REFUSED",
-            sessionId: request.sessionId,
+            sessionId: session.sessionId,
             reason: result.reason,
           }),
         );
@@ -233,11 +251,19 @@ export function createHandler(overrides: Partial<VoiceSessionDependencies> = {})
       console.log(
         JSON.stringify({
           event: "VOICE_SESSION_STARTED",
-          sessionId: request.sessionId,
+          sessionId: session.sessionId,
         }),
       );
-      // Only the projected grant. The raw Connect response stays here.
-      return json(200, { status: "STARTED", grant: result.grant }, origin);
+      /*
+       * The projected grant plus the server-created session id, which the
+       * portal needs to read the run report afterwards. The raw Connect
+       * response stays here.
+       */
+      return json(
+        200,
+        { status: "STARTED", grant: result.grant, sessionId: session.sessionId },
+        origin,
+      );
     } catch (error) {
       console.error(
         JSON.stringify({
