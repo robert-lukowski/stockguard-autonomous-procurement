@@ -23,6 +23,22 @@ export type DynamoCommand =
       expressionAttributeValues: Record<string, unknown>;
     }
   | {
+      /**
+       * Reads every item under one partition key.
+       *
+       * Added for the procurement store, whose session is spread across several
+       * items so that the security-critical writes (single-use confirmation,
+       * run completion) can each be their own conditional write instead of a
+       * read-modify-write of one large item.
+       */
+      operation: "Query";
+      tableName: string;
+      keyConditionExpression: string;
+      expressionAttributeNames: Record<string, string>;
+      expressionAttributeValues: Record<string, unknown>;
+      consistentRead: boolean;
+    }
+  | {
       operation: "TransactWrite";
       items: Array<{
         operation: "Put";
@@ -36,6 +52,8 @@ export type DynamoCommand =
 
 export type DynamoCommandResult = {
   item?: Record<string, unknown>;
+  /** Populated by Query. Ordered by sort key, ascending. */
+  items?: Record<string, unknown>[];
 };
 
 /**

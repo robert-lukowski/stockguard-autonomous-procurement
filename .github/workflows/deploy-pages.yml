@@ -21,9 +21,26 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      # Public HTTPS endpoint only. CALL-E key, Judge PIN and destination stay
-      # server-side in AWS Secrets Manager and are never exposed to Vite.
+      # PUBLIC, NON-SECRET CONFIGURATION ONLY.
+      #
+      # Everything below is a URL or a feature flag: values a visitor can read
+      # out of the built bundle anyway. Nothing here grants access on its own.
+      #
+      # Deliberately absent, and each absence is a security property:
+      #   - the judge access code. A judge types it; it is verified against a
+      #     PBKDF2 digest in Secrets Manager and never leaves the request body.
+      #   - the judge session token. Minted per sign-in, held in browser memory
+      #     only, and never built into a bundle.
+      #   - AWS credentials of any kind. The browser has none and needs none.
+      #   - the CALL-E key and Judge PIN, which stay server-side.
       VITE_QUALIFICATION_BACKEND_URL: ${{ vars.QUALIFICATION_BACKEND_URL }}
+      # Exactly "true" arms browser voice; TRUE, 1 and yes all leave it off.
+      VITE_WEBRTC_JUDGE_MODE: ${{ vars.WEBRTC_JUDGE_MODE }}
+      # Both endpoints or neither: the portal refuses to offer voice with only
+      # one, since a session endpoint without a sign-in endpoint leaves the
+      # judge no way to obtain a token.
+      VITE_WEBRTC_SESSION_URL: ${{ vars.WEBRTC_SESSION_URL }}
+      VITE_JUDGE_LOGIN_URL: ${{ vars.JUDGE_LOGIN_URL }}
 
     steps:
       - name: Check out repository

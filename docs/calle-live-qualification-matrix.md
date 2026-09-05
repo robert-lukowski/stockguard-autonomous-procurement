@@ -1,7 +1,17 @@
 # CALL-E live qualification matrix
 
-Observation sheet for the **first real English call**. Nothing here has been
-observed yet — every value is a blank to fill in during a controlled run.
+Observation sheet for the **first real English call**. Every value below is
+still a blank.
+
+> **Clarified 2026-09-04.** "Nothing has been observed" was too strong: live
+> calls did reach the Connect flow, and their turn-taking behaviour drove the
+> fixes in PR #63. What is true is narrower and still worth stating — **no row
+> of this matrix has been filled in**, so no CALL-E API shape, no failure-code
+> vocabulary and no policy-path result is recorded anywhere. Section B
+> (Connect / Lex / Lambda) is the part live behaviour touched.
+>
+> Filling this matrix is deferred: bot-to-bot PSTN left the MVP in
+> [ADR 0001](./adr-0001-webrtc-judge-portal.md).
 
 > **Never commit** an API key, a full phone number, or a raw transcript
 > containing one. Mask numbers as `+1•••••••42`.

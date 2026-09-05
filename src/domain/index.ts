@@ -1,5 +1,5 @@
 export { calculateShortage } from "./forecast";
-export { normalizeOffer } from "./normalization";
+export { normalizeOffer, roundCurrency } from "./normalization";
 export { validateOffer } from "./policy";
 export { selectBestCompliantOffer } from "./selection";
 export type {
