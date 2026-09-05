@@ -65,8 +65,10 @@ data "aws_secretsmanager_secret" "judge_access_code" {
 resource "aws_lexv2models_bot" "judge_voice" {
   count = local.judge_voice_count
 
-  name     = "${local.name_prefix}-judge-voice"
-  role_arn = aws_iam_role.judge_lex_bot[0].arn
+  name        = "${local.name_prefix}-judge-voice"
+  description = "Judge-facing procurement assistant for WebRTC Judge Mode."
+  role_arn    = aws_iam_role.judge_lex_bot[0].arn
+  type        = "Bot"
 
   # Synthetic demo data only: no real customer speech is processed.
   data_privacy {
@@ -133,17 +135,27 @@ resource "aws_lexv2models_intent" "request_procurement" {
   name        = "RequestProcurement"
   description = "Any spoken procurement request. The transcript is parsed deterministically by the Lambda."
 
-  sample_utterances { utterance = "I need twenty industrial SSD drives within a week" }
-  sample_utterances { utterance = "I need some industrial SSDs" }
-  sample_utterances { utterance = "We need network adapters within ten days" }
-  sample_utterances { utterance = "Can you order forty SSD drives" }
-  sample_utterances { utterance = "I want to buy memory modules" }
-  sample_utterances { utterance = "Order four rack UPS units" }
-  sample_utterances { utterance = "I need to purchase some hardware" }
-  sample_utterances { utterance = "Check availability and pricing" }
+  sample_utterance { utterance = "I need twenty industrial SSD drives within a week" }
+  sample_utterance { utterance = "I need some industrial SSDs" }
+  sample_utterance { utterance = "We need network adapters within ten days" }
+  sample_utterance { utterance = "Can you order forty SSD drives" }
+  sample_utterance { utterance = "I want to buy memory modules" }
+  sample_utterance { utterance = "Order four rack UPS units" }
+  sample_utterance { utterance = "I need to purchase some hardware" }
+  sample_utterance { utterance = "Check availability and pricing" }
 
   fulfillment_code_hook {
     enabled = true
+  }
+
+  # BuildBotLocale materialises the service defaults for these two settings and
+  # Terraform would then plan to strip them, a diff that never converges. Same
+  # reasoning as the supplier intents in lex.tf.
+  lifecycle {
+    ignore_changes = [
+      initial_response_setting,
+      fulfillment_code_hook[0].post_fulfillment_status_specification,
+    ]
   }
 }
 
@@ -156,15 +168,25 @@ resource "aws_lexv2models_intent" "confirm_purchase" {
   name        = "ConfirmPurchase"
   description = "Explicit acceptance. The confirmation token never leaves the server."
 
-  sample_utterances { utterance = "yes" }
-  sample_utterances { utterance = "yes please create it" }
-  sample_utterances { utterance = "go ahead" }
-  sample_utterances { utterance = "create the purchase request" }
-  sample_utterances { utterance = "confirm" }
-  sample_utterances { utterance = "that works" }
+  sample_utterance { utterance = "yes" }
+  sample_utterance { utterance = "yes please create it" }
+  sample_utterance { utterance = "go ahead" }
+  sample_utterance { utterance = "create the purchase request" }
+  sample_utterance { utterance = "confirm" }
+  sample_utterance { utterance = "that works" }
 
   fulfillment_code_hook {
     enabled = true
+  }
+
+  # BuildBotLocale materialises the service defaults for these two settings and
+  # Terraform would then plan to strip them, a diff that never converges. Same
+  # reasoning as the supplier intents in lex.tf.
+  lifecycle {
+    ignore_changes = [
+      initial_response_setting,
+      fulfillment_code_hook[0].post_fulfillment_status_specification,
+    ]
   }
 }
 
@@ -177,14 +199,71 @@ resource "aws_lexv2models_intent" "decline_purchase" {
   name        = "DeclinePurchase"
   description = "Explicit rejection. Recorded as its own outcome, never as an absence of one."
 
-  sample_utterances { utterance = "no" }
-  sample_utterances { utterance = "no thanks" }
-  sample_utterances { utterance = "cancel that" }
-  sample_utterances { utterance = "do not order it" }
-  sample_utterances { utterance = "stop" }
+  sample_utterance { utterance = "no" }
+  sample_utterance { utterance = "no thanks" }
+  sample_utterance { utterance = "cancel that" }
+  sample_utterance { utterance = "do not order it" }
+  sample_utterance { utterance = "stop" }
 
   fulfillment_code_hook {
     enabled = true
+  }
+
+  # BuildBotLocale materialises the service defaults for these two settings and
+  # Terraform would then plan to strip them, a diff that never converges. Same
+  # reasoning as the supplier intents in lex.tf.
+  lifecycle {
+    ignore_changes = [
+      initial_response_setting,
+      fulfillment_code_hook[0].post_fulfillment_status_specification,
+    ]
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Build the DRAFT locale.
+#
+# PROVIDER GAP: hashicorp/aws cannot build a Lex V2 locale, so the build is
+# sequenced through the AWS CLI, exactly as lex.tf already does for the
+# supplier bot.
+#
+# This is deliberately NOT a manual step. A version must be cut from a BUILT
+# draft, so leaving the build to an operator between stages would mean Stage A
+# snapshots an unbuilt locale and the bot answers nothing. The one thing that
+# genuinely cannot be automated is the Connect association, and that is the
+# only thing the manual bridge still contains.
+# ---------------------------------------------------------------------------
+resource "terraform_data" "judge_locale_build" {
+  count = local.judge_voice_count
+
+  # Rebuild whenever the conversational surface changes, so a new intent cannot
+  # quietly ship inside an unbuilt locale.
+  triggers_replace = [
+    "generation-1-judge-voice",
+    aws_lexv2models_bot_locale.judge_voice[0].id,
+    aws_lexv2models_intent.request_procurement[0].id,
+    aws_lexv2models_intent.confirm_purchase[0].id,
+    aws_lexv2models_intent.decline_purchase[0].id,
+  ]
+
+  provisioner "local-exec" {
+    interpreter = ["/bin/bash", "-c"]
+    command     = <<-EOT
+      set -euo pipefail
+      BOT=${aws_lexv2models_bot.judge_voice[0].id}
+
+      aws lexv2-models build-bot-locale --region ${var.aws_region}         --bot-id "$BOT" --bot-version DRAFT --locale-id ${local.judge_lex_locale_id} >/dev/null
+      for _ in $(seq 1 60); do
+        STATUS="$(aws lexv2-models describe-bot-locale --region ${var.aws_region}           --bot-id "$BOT" --bot-version DRAFT --locale-id ${local.judge_lex_locale_id}           --query botLocaleStatus --output text)"
+        case "$STATUS" in
+          Built) echo "judge locale built"; exit 0 ;;
+          Failed) echo "judge locale build FAILED" >&2; exit 1 ;;
+        esac
+        sleep 5
+      done
+      echo "timed out waiting for the judge locale build" >&2
+      exit 1
+    EOT
   }
 }
 
@@ -199,11 +278,15 @@ resource "aws_lexv2models_bot_version" "judge_voice" {
     }
   }
 
-  depends_on = [
-    aws_lexv2models_intent.request_procurement,
-    aws_lexv2models_intent.confirm_purchase,
-    aws_lexv2models_intent.decline_purchase,
-  ]
+  # The snapshot must be taken from a BUILT draft, so the build is a hard
+  # dependency and a rebuild forces a fresh version. create_before_destroy
+  # keeps a version alive for the alias while the new one is cut.
+  depends_on = [terraform_data.judge_locale_build]
+
+  lifecycle {
+    replace_triggered_by  = [terraform_data.judge_locale_build]
+    create_before_destroy = true
+  }
 }
 
 # Cloud Control: hashicorp/aws still has no aws_lexv2models_bot_alias

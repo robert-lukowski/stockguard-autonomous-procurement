@@ -123,7 +123,7 @@ terraform plan -out=stage-a.tfplan \
 | IAM roles | `…-judge-auth`, `…-judge-voice`, `…-voice-session`, `…-judge-lex-bot` |
 | HTTP API + REQUEST authorizer + `$default` stage | `stockguard-qualification-voice-session` |
 | Routes | `POST /judge-sessions` (no auth), `POST /voice-sessions` (authorizer) |
-| Lex V2 | bot, `en_US` locale, version, `judge` alias |
+| Lex V2 | bot, `en_US` locale (built automatically), version, `judge` alias |
 | CloudWatch log groups | four |
 
 It must **not** create a contact flow, a phone number, a Lambda Function URL,
@@ -139,6 +139,12 @@ terraform apply stage-a.tfplan
 terraform output judge_login_endpoint        # https://…/judge-sessions
 terraform output voice_session_endpoint      # https://…
 terraform output judge_lex_bot_alias_arn     # needed by the bridge below
+
+# The locale was built by the apply; confirm it before continuing.
+aws lexv2-models describe-bot-locale --region eu-central-1 \
+  --bot-id "$(terraform output -raw judge_lex_bot_id)" \
+  --bot-version DRAFT --locale-id en_US --query botLocaleStatus --output text
+# → Built
 
 # Sign-in works and issues a token.
 curl -sS -X POST "$(terraform output -raw judge_login_endpoint)" \
@@ -169,28 +175,14 @@ works, and no contact can be started.
 
 ---
 
-## Manual bridge
+## Manual bridge — associate the Lex alias
 
-**B1. Build the Lex locale.** Terraform creates intents; AWS builds the locale
-asynchronously.
+Only one step, because it is the only thing Terraform genuinely cannot do.
+Stage A already built the Lex locale and cut the version from it; that is
+automated by `terraform_data.judge_locale_build`, the same pattern `lex.tf`
+uses for the supplier bot.
 
-```bash
-BOT_ID=$(terraform output -raw judge_lex_bot_id)
-
-aws lexv2-models build-bot-locale --region eu-central-1 \
-  --bot-id "$BOT_ID" --bot-version DRAFT --locale-id en_US
-```
-
-**B2. Wait for `Built`.** Do not continue until it says so:
-
-```bash
-aws lexv2-models describe-bot-locale --region eu-central-1 \
-  --bot-id "$BOT_ID" --bot-version DRAFT --locale-id en_US \
-  --query 'botLocaleStatus' --output text
-# poll until: Built
-```
-
-**B3. Associate the alias with the Connect instance.** Terraform prints the
+**B1. Associate the alias with the Connect instance.** Terraform prints the
 exact command; it is idempotent.
 
 ```bash
@@ -198,7 +190,7 @@ terraform output -raw judge_manual_connect_association_command
 # then run what it prints
 ```
 
-**B4. Verify the association.** The alias ARN from Stage A must appear:
+**B2. Verify the association.** The alias ARN from Stage A must appear:
 
 ```bash
 aws connect list-bots --region eu-central-1 \
