@@ -247,7 +247,7 @@ resource "terraform_data" "judge_locale_build" {
   ]
 
   provisioner "local-exec" {
-    interpreter = ["/bin/bash", "-c"]
+    interpreter = ["bash", "-c"]
     command     = <<-EOT
       set -euo pipefail
       BOT=${aws_lexv2models_bot.judge_voice[0].id}
