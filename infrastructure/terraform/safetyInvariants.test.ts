@@ -283,7 +283,6 @@ describe("infrastructure invariants", () => {
   it("pins the pre-existing recording storage as non-secret qualification defaults", () => {
     const variables = tf("variables.tf");
     const root = tf("main.tf");
-    const caller = tf("qualification-caller.tf");
     expect(variables).toMatch(
       /variable "recording_bucket_name"[\s\S]*?default\s*=\s*"amazon-connect-93f5db840470"/,
     );
@@ -297,9 +296,6 @@ describe("infrastructure invariants", () => {
     expect(root).toContain(
       'recording_bucket_arn      = "arn:aws:s3:::${var.recording_bucket_name}"',
     );
-    expect(caller).toContain("recording_bucket_name     = var.recording_bucket_name");
-    expect(caller).toContain("recording_prefix          = var.recording_prefix");
-    expect(caller).toContain("recording_kms_key_arn     = var.recording_kms_key_arn");
   });
 
   it("gives only the caller scoped recording lookup permissions and environment", () => {

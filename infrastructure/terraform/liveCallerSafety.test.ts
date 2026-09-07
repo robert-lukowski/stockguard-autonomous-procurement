@@ -5,12 +5,11 @@ import { describe, expect, it } from "vitest";
 /**
  * Safety invariants for the PSTN live caller.
  *
- * Deliberately a separate file from `safetyInvariants.test.ts`: that file is
- * being edited by an open pull request, and splitting these assertions out
- * keeps two unrelated changes from colliding in the same hunks.
- *
- * The property under test: the one resource in this repository that can spend
- * money by placing a real telephone call cannot be created by accident.
+ * The live caller is now RETIRED (ADR-0001). qualification-caller.tf carries
+ * only a `removed` block: no module is declared, and the six resources left in
+ * the runtime state are torn down on the next apply. These invariants keep it
+ * retired, and keep the still-present handler code and portal UI from claiming
+ * controls the endpoint never had.
  */
 const repoRoot = join(__dirname, "..", "..");
 
@@ -32,26 +31,26 @@ const callerModule = repoFile(
   "main.tf",
 );
 
-describe("live caller is disabled by default", () => {
-  it("declares live_caller_enabled and defaults it to false", () => {
+describe("the PSTN live caller is retired", () => {
+  it("declares no module: a removed block tears the caller down instead", () => {
+    expect(callerRoot).not.toMatch(/module\s+"qualification_caller"\s*{/);
+    expect(callerRoot).toMatch(
+      /removed\s*{[\s\S]*?from\s*=\s*module\.qualification_caller/,
+    );
+    expect(callerRoot).toMatch(/destroy\s*=\s*true/);
+  });
+
+  it("still keeps live_caller_enabled defaulting to false", () => {
+    // The variable is now inert with no module referencing it, but until the
+    // follow-up cleanup removes it, a true default would be a loaded gun.
     const block = variables.slice(variables.indexOf('variable "live_caller_enabled"'));
     expect(block).toContain('variable "live_caller_enabled"');
     expect(block.slice(0, block.indexOf("EOT"))).toMatch(/default\s*=\s*false/);
   });
 
-  it("creates the caller module only when that variable is true", () => {
-    expect(callerRoot).toContain("count  = var.live_caller_enabled ? 1 : 0");
-  });
-
-  it("keeps the public Function URL inside the gated module", () => {
-    // If this ever moves to the root module it stops being gated by count.
-    expect(callerRoot).not.toContain("aws_lambda_function_url");
-    expect(callerModule).toContain('resource "aws_lambda_function_url" "this"');
-    expect(callerModule).toContain('authorization_type = "NONE"');
-  });
-
-  it("returns a null URL output when the caller is disabled", () => {
-    expect(callerRoot).toContain("one(module.qualification_caller[*].url)");
+  it("declares no Lambda Function URL and no caller URL output in the root", () => {
+    expect(callerRoot).not.toMatch(/resource\s+"aws_lambda_function_url"/);
+    expect(callerRoot).not.toMatch(/^\s*output\s+"qualification_caller_url"/m);
   });
 
   it("is never enabled by any workflow or example configuration", () => {
