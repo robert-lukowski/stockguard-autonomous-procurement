@@ -1,33 +1,34 @@
 # ---------------------------------------------------------------------------
-# PSTN live caller: OFF by default.
+# PSTN live caller: RETIRED.
 #
-# This module is the only thing in the configuration that can place a real,
-# paid telephone call, and it publishes a Lambda Function URL with
-# authorization_type = "NONE" to do it. Since the Judge Portal pivot the MVP
-# no longer needs it (see docs/adr-0001-webrtc-judge-portal.md), so it is now
-# created only when var.live_caller_enabled is explicitly set to true.
+# ADR-0001 removed bot-to-bot PSTN from the MVP. The module was already gated
+# off (count = 0 unless var.live_caller_enabled, which nothing sets), but an
+# earlier apply had left its resources in the runtime state with no
+# configuration left to reconcile against - so every plan reported them as
+# orphaned destroys ("module.qualification_caller is not in configuration").
 #
-# count = 0 means the Function URL is not in the plan at all - not merely
-# unreferenced, but never created. Nothing in CI sets this variable.
+# This removed block turns that into one explicit, reviewed teardown. The next
+# apply destroys exactly these six, and nothing else:
+#
+#   module.qualification_caller.aws_cloudwatch_log_group.this
+#   module.qualification_caller.aws_iam_role.this
+#   module.qualification_caller.aws_iam_role_policy.this
+#   module.qualification_caller.aws_iam_role_policy.recordings[0]
+#   module.qualification_caller.aws_lambda_function.this
+#   module.qualification_caller.aws_lambda_function_url.this
+#
+# The CALL-E API-key secret is read as a data source, never managed here, so it
+# is untouched.
+#
+# The ./modules/qualification-caller source and var.live_caller_enabled are
+# left in place: they are inert with no module block referencing them, and
+# removing them is follow-up cleanup once this teardown has been applied and
+# this block itself can be dropped.
 # ---------------------------------------------------------------------------
-module "qualification_caller" {
-  count  = var.live_caller_enabled ? 1 : 0
-  source = "./modules/qualification-caller"
+removed {
+  from = module.qualification_caller
 
-  name_prefix               = local.name_prefix
-  log_retention_days        = var.log_retention_days
-  qualification_sku         = var.qualification_sku
-  qualification_quantity    = var.qualification_quantity
-  qualification_required_by = var.qualification_required_by
-  recording_enabled         = var.enable_call_recording
-  recording_bucket_name     = var.recording_bucket_name
-  recording_bucket_arn      = local.recording_bucket_arn
-  recording_prefix          = var.recording_prefix
-  recording_kms_key_arn     = var.recording_kms_key_arn
-  recording_url_ttl_seconds = local.recording_url_ttl_seconds
-}
-
-output "qualification_caller_url" {
-  value       = one(module.qualification_caller[*].url)
-  description = "Null unless var.live_caller_enabled is true. When set, this is a PUBLIC unauthenticated Function URL that places real paid PSTN calls."
+  lifecycle {
+    destroy = true
+  }
 }
