@@ -15,8 +15,10 @@
 # deliberate manual act, not a rollback step.
 #
 # USAGE
-#   scripts/judge-voice/rollback.sh --voice-off --instance-id "$AWS_CONNECT_INSTANCE_ID"
-#   scripts/judge-voice/rollback.sh --all      --instance-id "$AWS_CONNECT_INSTANCE_ID"
+#   scripts/judge-voice/rollback.sh --voice-off --instance-id "$AWS_CONNECT_INSTANCE_ID" \
+#                                   --state-bucket "$TF_STATE_BUCKET"
+#   scripts/judge-voice/rollback.sh --all      --instance-id "$AWS_CONNECT_INSTANCE_ID" \
+#                                   --state-bucket "$TF_STATE_BUCKET"
 
 set -euo pipefail
 export AWS_PAGER=""
@@ -24,6 +26,8 @@ export AWS_PAGER=""
 MODE=""
 REGION="${AWS_REGION:-eu-central-1}"
 INSTANCE_ID="${AWS_CONNECT_INSTANCE_ID:-}"
+STATE_BUCKET="${TF_STATE_BUCKET:-}"
+STATE_KEY="${TF_STATE_KEY:-}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -31,6 +35,8 @@ while [ $# -gt 0 ]; do
     --all) MODE="all"; shift ;;
     --region) REGION="${2:?--region needs a value}"; shift 2 ;;
     --instance-id) INSTANCE_ID="${2:?--instance-id needs a value}"; shift 2 ;;
+    --state-bucket) STATE_BUCKET="${2:?--state-bucket needs a value}"; shift 2 ;;
+    --state-key) STATE_KEY="${2:?--state-key needs a value}"; shift 2 ;;
     -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
     *) echo "unrecognized argument: $1" >&2; exit 2 ;;
   esac
@@ -42,7 +48,14 @@ command -v node >/dev/null || { echo "node not found" >&2; exit 1; }
 [ -n "$INSTANCE_ID" ] || { echo "pass --instance-id or set AWS_CONNECT_INSTANCE_ID" >&2; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=scripts/judge-voice/backend.sh
+. "$SCRIPT_DIR/backend.sh"
+STATE_KEY="${STATE_KEY:-$TF_STATE_KEY_DEFAULT}"
 cd "$SCRIPT_DIR/../../infrastructure/terraform"
+
+# A rollback that planned against the wrong state would be the worst of these
+# three to get wrong, so it inits explicitly like the other two.
+tf_init_with_backend "$STATE_BUCKET" "$STATE_KEY" "$REGION"
 
 if [ "$MODE" = "voice-off" ]; then
   echo "==> planning: contact flow and StartWebRTCContact removed, rest intact"
