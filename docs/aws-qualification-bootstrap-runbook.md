@@ -55,6 +55,11 @@ Check first whether the stack or the `stockguard-github-deploy` role already
 exists. Reuse it if it matches. If it is in a `ROLLBACK`/`FAILED` state,
 inspect that specific failure and repair only the blocker.
 
+If the stack already exists but predates a template change (for example the
+`iam:ListInstanceProfilesForRole` action the provider needs to delete a
+`stockguard-*` role), run a stack **update** with the current template rather
+than a fresh create.
+
 **Do not modify the existing read-only role** (`stockguard-github-readonly`)
 or its workflow.
 

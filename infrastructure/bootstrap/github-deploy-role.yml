@@ -108,6 +108,12 @@ Resources:
                   - iam:DetachRolePolicy
                   - iam:ListAttachedRolePolicies
                   - iam:UpdateAssumeRolePolicy
+                  # The provider calls ListInstanceProfilesForRole on every role
+                  # delete, to detach the role from any instance profile first.
+                  # These roles are only ever assumed by Lambda and Lex, so the
+                  # list is always empty - but without this action DeleteRole
+                  # fails with AccessDenied and leaves the role behind.
+                  - iam:ListInstanceProfilesForRole
                 Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/stockguard-*"
 
               - Sid: PassOnlyStockGuardRolesToTheirOwnServices
