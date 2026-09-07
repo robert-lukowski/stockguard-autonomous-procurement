@@ -232,6 +232,69 @@ describe("terraform init is deterministic", () => {
   });
 });
 
+describe("every required Terraform variable reaches the plan", () => {
+  /**
+   * The variables variables.tf declares with no default.
+   *
+   * Read from the file rather than listed here, so a variable added later is
+   * covered the day it is added. Stage A shipped twice without
+   * `aws_account_id`, and the plan died on "No value for required variable"
+   * against a real account - the one place nothing in this repository was
+   * watching.
+   */
+  function requiredVariables(): string[] {
+    const tf = readFileSync(
+      join(scriptDir, "..", "..", "infrastructure", "terraform", "variables.tf"),
+      "utf8",
+    );
+    const required: string[] = [];
+    for (const [, name, body] of tf.matchAll(/^variable\s+"([^"]+)"\s*\{([\s\S]*?)^\}/gm)) {
+      if (!/^\s{2}default\s*=/m.test(body)) required.push(name);
+    }
+    return required;
+  }
+
+  it("finds the required variables at all", () => {
+    // A parser that silently matched nothing would make the next test vacuous.
+    const required = requiredVariables();
+
+    expect(required).toContain("aws_account_id");
+    expect(required).toContain("connect_instance_id");
+  });
+
+  it("stage-a.sh passes every one of them to terraform plan", () => {
+    const plan = /terraform plan[\s\S]*?\n\n/.exec(commands(stageA))?.[0] ?? "";
+
+    for (const name of requiredVariables()) {
+      expect(plan).toContain(`-var "${name}=`);
+    }
+  });
+
+  it("derives the account id instead of hardcoding one", () => {
+    /*
+     * A written-down account id plans against the wrong account the moment the
+     * shell's credentials point elsewhere, and the ARNs Terraform builds from
+     * it would name an account nobody is deploying to.
+     */
+    expect(stageA).toContain("aws sts get-caller-identity");
+    expect(stageA).toContain("--query Account --output text");
+    expect(stageA).not.toMatch(/aws_account_id=[0-9]{12}/);
+    expect(stageA).not.toMatch(/ACCOUNT_ID="[0-9]{12}"/);
+  });
+
+  it("refuses rather than planning with an unusable account id", () => {
+    // `aws --output text` prints None instead of failing on some responses, so
+    // a non-empty value is not evidence of a usable one.
+    expect(stageA).toContain("REFUSING: could not determine the AWS account id.");
+    expect(stageA).toContain("grep -Eq '^[0-9]{12}$'");
+  });
+
+  it("takes the account id from a flag or an explicit variable", () => {
+    expect(stageA).toContain('ACCOUNT_ID="${AWS_ACCOUNT_ID:-}"');
+    expect(stageA).toContain("--account-id) ACCOUNT_ID=");
+  });
+});
+
 describe("the plan the guard reads is the plan that gets applied", () => {
   it.each(applying)("%s inspects the plan before asking for confirmation", (_name, source) => {
     expect(source.indexOf("planGuard.mjs")).toBeLessThan(source.indexOf("read -r CONFIRM"));
