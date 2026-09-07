@@ -30,6 +30,10 @@
  *
  * So both sources are used here, each for the only question it answers.
  *
+ * One destruction is allowed through: the retired PSTN live caller, which is
+ * already gated off in configuration and only appears because state has not
+ * caught up. See isCallerRetirement.
+ *
  * Reads the plan on stdin. Exits 0 when the plan is acceptable, 1 when it is
  * not, and prints why either way.
  *
@@ -95,6 +99,36 @@ export function isDestructive(change) {
 
 export function isCreated(change) {
   return actionsOf(change).includes("create");
+}
+
+/**
+ * The one destruction Stage A is allowed to carry.
+ *
+ * modules/qualification-caller is the PSTN live caller. Since the Judge Portal
+ * pivot it is gated `count = var.live_caller_enabled ? 1 : 0` with the variable
+ * defaulting to false, so it is already retired in configuration - its six
+ * resources appear as destroys only because state still remembers an earlier
+ * apply that had it enabled. Refusing them stops Stage A on a retirement the
+ * repository has already decided on.
+ *
+ * Deliberately narrow:
+ *   - only this module, matched at an address boundary so a differently named
+ *     module starting with the same characters is not covered
+ *   - only a plain delete. A replacement (["delete","create"]) is still
+ *     refused; with count = 0 nothing here can be recreated, so a plan
+ *     proposing that is a plan worth stopping on.
+ *
+ * Once the retirement has been applied these destroys stop appearing and this
+ * allowance goes inert; it can be deleted then.
+ */
+export function isCallerRetirement(change) {
+  const address = typeof change?.address === "string" ? change.address : "";
+  const inModule =
+    address.startsWith("module.qualification_caller.") ||
+    address.startsWith("module.qualification_caller[");
+  const actions = actionsOf(change);
+
+  return inModule && actions.length === 1 && actions[0] === "delete";
 }
 
 /** Matches a resource by type and name, so `count` indices do not matter. */
@@ -198,11 +232,22 @@ export function evaluate(planName, plan) {
    * as ["delete","create"], and destroying a live Lambda or API to recreate it
    * is not something to wave through on the way to a demo.
    */
-  if (destructive.length > 0) {
+  const retiring = destructive.filter(isCallerRetirement);
+  const unexpected = destructive.filter((change) => !isCallerRetirement(change));
+
+  if (unexpected.length > 0) {
     refuse(
-      `the plan destroys or replaces ${destructive.length} resource(s): ` +
-        destructive.map((change) => `${change.address} [${actionsOf(change).join(",")}]`).join(", "),
+      `the plan destroys or replaces ${unexpected.length} resource(s): ` +
+        unexpected.map((change) => `${change.address} [${actionsOf(change).join(",")}]`).join(", "),
     );
+  } else if (retiring.length > 0) {
+    // Counted out loud so the operator can check it against what they expect
+    // before typing APPLY, rather than taking the guard's word for it.
+    note(
+      `nothing unexpected is destroyed; ${retiring.length} retired live-caller ` +
+        "resource(s) are removed:",
+    );
+    for (const change of retiring) note(`  ${change.address}`);
   } else {
     note("nothing is destroyed or replaced");
   }

@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 // @ts-expect-error -- .mjs module without type declarations; shape is asserted below.
-import { evaluate, isDestructive, matches, plannedResources } from "./planGuard.mjs";
+import {
+  evaluate,
+  isCallerRetirement,
+  isDestructive,
+  matches,
+  plannedResources,
+} from "./planGuard.mjs";
 
 /**
  * The plan shapes that matter, written the way Terraform actually writes them.
@@ -16,6 +22,16 @@ type Actions = string[];
 function change(type: string, name: string, actions: Actions, index?: number) {
   const address = index === undefined ? `${type}.${name}` : `${type}.${name}[${index}]`;
   return { address, type, name, change: { actions } };
+}
+
+/** A change inside the retired live-caller module, addressed as Terraform writes it. */
+function callerChange(type: string, name: string, actions: Actions, index = 0) {
+  return {
+    address: `module.qualification_caller[${index}].${type}.${name}`,
+    type,
+    name,
+    change: { actions },
+  };
 }
 
 type Change = ReturnType<typeof change>;
@@ -127,6 +143,97 @@ describe("Stage A", () => {
 
     expect(result.ok).toBe(false);
     expect(result.lines.join("\n")).toContain("destroys or replaces 1 resource");
+  });
+});
+
+describe("the retired live caller", () => {
+  /*
+   * modules/qualification-caller is gated `count = var.live_caller_enabled ? 1
+   * : 0` with the variable defaulting to false, so it is already retired in
+   * configuration. Its six resources show as destroys only because state
+   * remembers an earlier apply. Refusing them stopped Stage A on a decision
+   * the repository had already made.
+   */
+  it("lets Stage A carry the six retirement destroys", () => {
+    const names: Array<[string, string]> = [
+      ["aws_cloudwatch_log_group", "this"],
+      ["aws_iam_role", "this"],
+      ["aws_iam_role_policy", "this"],
+      ["aws_iam_role_policy", "recordings"],
+      ["aws_lambda_function", "this"],
+      ["aws_lambda_function_url", "this"],
+    ];
+    const result = evaluate(
+      "stage-a",
+      plan(
+        ...names.map(([type, name]) => callerChange(type, name, ["delete"])),
+        change("aws_dynamodb_table", "procurement", ["create"], 0),
+      ),
+    );
+
+    expect(result.ok).toBe(true);
+    const output = result.lines.join("\n");
+    expect(output).toContain("6 retired live-caller resource(s) are removed");
+    expect(output).toContain("module.qualification_caller[0].aws_lambda_function_url.this");
+  });
+
+  it("still refuses anything else destroyed in the same plan", () => {
+    // The allowance must not become a general amnesty for that plan.
+    const result = evaluate(
+      "stage-a",
+      plan(
+        callerChange("aws_lambda_function", "this", ["delete"]),
+        change("aws_dynamodb_table", "procurement", ["delete"], 0),
+      ),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.lines.join("\n")).toContain("destroys or replaces 1 resource");
+    expect(result.lines.join("\n")).toContain("aws_dynamodb_table.procurement");
+  });
+
+  it("refuses a REPLACEMENT inside the module, not just a delete", () => {
+    // With count = 0 nothing there can be recreated, so a plan proposing it is
+    // describing something other than the retirement.
+    const result = evaluate(
+      "stage-a",
+      plan(callerChange("aws_lambda_function", "this", ["delete", "create"])),
+    );
+
+    expect(result.ok).toBe(false);
+  });
+
+  it("matches the module at an address boundary", () => {
+    expect(isCallerRetirement(callerChange("aws_iam_role", "this", ["delete"]))).toBe(true);
+    expect(
+      isCallerRetirement({
+        address: "module.qualification_caller.aws_iam_role.this",
+        type: "aws_iam_role",
+        name: "this",
+        change: { actions: ["delete"] },
+      }),
+    ).toBe(true);
+    // A different module that merely starts with the same characters.
+    expect(
+      isCallerRetirement({
+        address: "module.qualification_caller_v2[0].aws_iam_role.this",
+        type: "aws_iam_role",
+        name: "this",
+        change: { actions: ["delete"] },
+      }),
+    ).toBe(false);
+    // Same resource type, but outside the module.
+    expect(isCallerRetirement(change("aws_lambda_function", "this", ["delete"], 0))).toBe(false);
+  });
+
+  it("does not loosen the rollback table check", () => {
+    // The table is protected by its own rule; the allowance is Stage A only.
+    const result = evaluate(
+      "rollback",
+      plan(change("aws_dynamodb_table", "procurement", ["delete"], 0)),
+    );
+
+    expect(result.ok).toBe(false);
   });
 });
 
