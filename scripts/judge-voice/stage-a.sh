@@ -12,7 +12,8 @@
 # would have surfaced only here. A green CI run does not tell you this works.
 #
 # USAGE
-#   scripts/judge-voice/stage-a.sh --instance-id "$AWS_CONNECT_INSTANCE_ID"
+#   scripts/judge-voice/stage-a.sh --instance-id "$AWS_CONNECT_INSTANCE_ID" \
+#                                  --state-bucket "$TF_STATE_BUCKET"
 #
 # --instance-id is required: var.connect_instance_id has no default, so a plan
 # without it either fails under -input=false or silently uses whatever a
@@ -27,6 +28,8 @@ export AWS_PAGER=""
 
 REGION="${AWS_REGION:-eu-central-1}"
 INSTANCE_ID="${AWS_CONNECT_INSTANCE_ID:-}"
+STATE_BUCKET="${TF_STATE_BUCKET:-}"
+STATE_KEY="${TF_STATE_KEY:-}"
 ACCESS_CODE_FILE=""
 SKIP_BUILD="false"
 TF_DIR="infrastructure/terraform"
@@ -35,6 +38,8 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --region) REGION="${2:?--region needs a value}"; shift 2 ;;
     --instance-id) INSTANCE_ID="${2:?--instance-id needs a value}"; shift 2 ;;
+    --state-bucket) STATE_BUCKET="${2:?--state-bucket needs a value}"; shift 2 ;;
+    --state-key) STATE_KEY="${2:?--state-key needs a value}"; shift 2 ;;
     --access-code-file) ACCESS_CODE_FILE="${2:?--access-code-file needs a path}"; shift 2 ;;
     --skip-build) SKIP_BUILD="true"; shift ;;
     -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
@@ -49,6 +54,9 @@ command -v node >/dev/null || { echo "node not found" >&2; exit 1; }
 [ -n "$INSTANCE_ID" ] || { echo "pass --instance-id or set AWS_CONNECT_INSTANCE_ID" >&2; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=scripts/judge-voice/backend.sh
+. "$SCRIPT_DIR/backend.sh"
+STATE_KEY="${STATE_KEY:-$TF_STATE_KEY_DEFAULT}"
 cd "$SCRIPT_DIR/../.."
 
 FAILURES=0
@@ -76,8 +84,7 @@ echo "    four bundles present"
 # ---------------------------------------------------------------------------
 cd "$TF_DIR"
 echo
-echo "==> terraform init"
-terraform init -input=false >/dev/null
+tf_init_with_backend "$STATE_BUCKET" "$STATE_KEY" "$REGION"
 
 echo
 echo "==> terraform plan (Stage A)"

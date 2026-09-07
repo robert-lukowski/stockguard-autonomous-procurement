@@ -16,11 +16,26 @@ function script(name: string): string {
   return readFileSync(join(scriptDir, name), "utf8");
 }
 
+/**
+ * The script with its comment lines removed.
+ *
+ * Ordering assertions have to read commands, not prose: these scripts describe
+ * the commands they are about to run, so a comment mentioning `terraform
+ * output` sits above the line that guards it.
+ */
+function commands(source: string): string {
+  return source
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("#"))
+    .join("\n");
+}
+
 const createSecret = script("create-access-code-secret.sh");
 const stageA = script("stage-a.sh");
 const bridge = script("bridge.sh");
 const stageB = script("stage-b.sh");
 const rollback = script("rollback.sh");
+const backend = script("backend.sh");
 
 const applying = [
   ["stage-a.sh", stageA],
@@ -49,6 +64,9 @@ describe("nothing applies without an explicit typed confirmation", () => {
     for (const source of [createSecret, stageA, bridge, stageB, rollback]) {
       expect(source).toContain("set -euo pipefail");
     }
+    // backend.sh is sourced, so it inherits the caller's shell options rather
+    // than setting its own; it must not weaken them.
+    expect(backend).not.toMatch(/set \+[eu]/);
   });
 });
 
@@ -145,6 +163,72 @@ describe("rollback cannot destroy the durable state", () => {
     // Terraform cannot reach a built Pages bundle; the flag is the only thing
     // that stops the portal offering a voice button that can no longer work.
     expect(rollback).toContain("WEBRTC_JUDGE_MODE");
+  });
+});
+
+describe("terraform init is deterministic", () => {
+  /*
+   * versions.tf declares `backend "s3" {}` as a partial configuration, so the
+   * bucket, key and region come from init. A bare `terraform init` either
+   * fails under -input=false or silently reuses a stale .terraform/ pointing
+   * at different state - which is worse, because the script then plans against
+   * state CI does not manage and says nothing about it.
+   */
+  it.each(applying)("%s never runs a bare terraform init", (_name, source) => {
+    const bareInit = /terraform init(?![^\n]*-backend-config)/;
+    expect(source).not.toMatch(bareInit);
+  });
+
+  it.each(applying)("%s inits through the shared helper", (_name, source) => {
+    expect(source).toContain('. "$SCRIPT_DIR/backend.sh"');
+    expect(source).toContain("tf_init_with_backend");
+  });
+
+  it.each(applying)("%s inits before any other terraform command", (_name, source) => {
+    // `terraform output` and `terraform plan` both read state, so an init that
+    // came after them would be reading the wrong one.
+    const code = commands(source);
+    const init = code.indexOf("tf_init_with_backend \"$STATE_BUCKET\"");
+    const firstOther = code.search(/terraform (plan|output|apply|show)/);
+
+    expect(init).toBeGreaterThan(-1);
+    expect(init).toBeLessThan(firstOther);
+  });
+
+  it.each(applying)("%s takes the bucket from a flag or an explicit variable", (_name, source) => {
+    expect(source).toContain('STATE_BUCKET="${TF_STATE_BUCKET:-}"');
+    expect(source).toContain("--state-bucket) STATE_BUCKET=");
+  });
+
+  it("refuses by name rather than initialising half-way", () => {
+    // A partial init still writes a .terraform/ that the next run would trust.
+    expect(backend).toContain("REFUSING: no state bucket.");
+    expect(backend).toContain("REFUSING: no state key");
+    expect(backend).toContain("REFUSING: no region for the state bucket.");
+  });
+
+  it("passes every backend setting, and -reconfigure so a stale init cannot win", () => {
+    for (const setting of ["bucket=", "key=", "region=", "encrypt=true", "use_lockfile=true"]) {
+      expect(backend).toContain(`-backend-config="${setting}`);
+    }
+    expect(backend).toContain("terraform init -reconfigure -input=false");
+  });
+
+  it("uses the same state key as the CI workflow", () => {
+    /*
+     * THE test worth having. The scripts and CI must plan against one state
+     * file; a different key is a different deployment, and nothing else in the
+     * repository would notice the drift.
+     */
+    const workflow = readFileSync(
+      join(scriptDir, "..", "..", ".github", "workflows", "terraform-plan.yml"),
+      "utf8",
+    );
+    const ciKey = /-backend-config="key=([^"]+)"/.exec(workflow)?.[1];
+    const scriptKey = /TF_STATE_KEY_DEFAULT="([^"]+)"/.exec(backend)?.[1];
+
+    expect(ciKey).toBeDefined();
+    expect(scriptKey).toBe(ciKey);
   });
 });
 
