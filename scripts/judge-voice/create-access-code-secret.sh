@@ -15,7 +15,11 @@
 #
 # Run once. To rotate the code later, re-run with --rotate.
 
+# Even `bash -x` / `bash -v` must not log the code or its digest.
+set +xv
 set -euo pipefail
+set +a
+umask 077
 export AWS_PAGER=""
 
 REGION="${AWS_REGION:-eu-central-1}"
@@ -38,6 +42,23 @@ command -v node >/dev/null || { echo "node not found" >&2; exit 1; }
 # A pipe or a CI runner has no TTY, and a secret typed into one is a secret in
 # a log. Refuse rather than fall back to reading stdin.
 [ -t 0 ] || { echo "refusing to read an access code without a terminal" >&2; exit 1; }
+
+# Clear inherited export attributes before reading any plaintext.
+unset ACCESS_CODE ACCESS_CODE_AGAIN DIGEST
+DIGEST_FILE=""
+cleanup() {
+  local status=$?
+  trap - EXIT
+  if [ -n "$DIGEST_FILE" ]; then
+    rm -f -- "$DIGEST_FILE" || status=1
+  fi
+  unset ACCESS_CODE ACCESS_CODE_AGAIN DIGEST
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 printf 'Judge access code (not echoed): '
 read -rs ACCESS_CODE
@@ -74,25 +95,44 @@ DIGEST="$(
 )"
 unset ACCESS_CODE ACCESS_CODE_AGAIN
 
-# The digest goes to AWS over stdin too: --secret-string on the command line
-# would put it in the process list.
+# Native Windows AWS CLI cannot read Git Bash's /dev/stdin. mktemp creates
+# an exclusive, private file; only the digest ever goes into it. EXIT also
+# removes it on an AWS/path-conversion failure or a handled signal.
+DIGEST_FILE="$(mktemp "${TMPDIR:-/tmp}/stockguard-judge-access-code.XXXXXXXXXX")"
+
+# AWS needs a native path on Windows, including when TMPDIR contains spaces.
+# Keep the POSIX path for shell cleanup and the native path only for AWS.
+AWS_DIGEST_FILE="$DIGEST_FILE"
+case "${OSTYPE:-}" in
+  msys*|cygwin*)
+    AWS_DIGEST_FILE="$(cygpath -m "$DIGEST_FILE")"
+    # MSYS umask does not restrict inherited Windows ACLs. Protect the empty
+    # file first; a failure must abort before any digest is written.
+    WINDOWS_SID="$(powershell.exe -NoProfile -NonInteractive -Command \
+      '[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value')"
+    WINDOWS_SID="${WINDOWS_SID//$'\r'/}"
+    MSYS_NO_PATHCONV=1 icacls.exe "$AWS_DIGEST_FILE" \
+      /inheritance:r /grant:r "*$WINDOWS_SID:F" >/dev/null
+    ;;
+esac
+printf '%s' "$DIGEST" > "$DIGEST_FILE"
+unset DIGEST
+
 if [ "$ROTATE" = "true" ]; then
-  printf '%s' "$DIGEST" | aws secretsmanager put-secret-value \
+  aws secretsmanager put-secret-value \
     --region "$REGION" --secret-id "$SECRET_NAME" \
-    --secret-string file:///dev/stdin >/dev/null
+    --secret-string "file://$AWS_DIGEST_FILE" >/dev/null
   echo "rotated $SECRET_NAME"
   echo
   echo "NOTE: rotating the code changes every judge's rate-limit identity,"
   echo "because it is derived from this digest. Existing sessions keep working"
   echo "until they expire."
 else
-  printf '%s' "$DIGEST" | aws secretsmanager create-secret \
+  aws secretsmanager create-secret \
     --region "$REGION" --name "$SECRET_NAME" \
     --description "PBKDF2-SHA256 digest of the StockGuard judge access code." \
-    --secret-string file:///dev/stdin >/dev/null
+    --secret-string "file://$AWS_DIGEST_FILE" >/dev/null
   echo "created $SECRET_NAME"
 fi
-unset DIGEST
-
 echo
 echo "Give the plaintext code to the judges. It exists nowhere else."

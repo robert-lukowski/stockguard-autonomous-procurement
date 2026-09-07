@@ -124,8 +124,9 @@ describe("the access code never reaches history, a log or the process list", () 
     expect(createSecret).toContain('${#ACCESS_CODE}" -ge 12');
   });
 
-  it("sends the digest to AWS on stdin, not as a command-line argument", () => {
-    expect(createSecret).toContain("--secret-string file:///dev/stdin");
+  it("sends the digest to AWS through a file, not as a command-line argument", () => {
+    expect(createSecret).toContain('--secret-string "file://$AWS_DIGEST_FILE"');
+    expect(createSecret).not.toContain("file:///dev/stdin");
     expect(createSecret).not.toMatch(/--secret-string ["']?\$DIGEST/);
   });
 
