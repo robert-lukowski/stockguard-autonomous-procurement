@@ -15,6 +15,10 @@
 #   scripts/judge-voice/stage-a.sh --instance-id "$AWS_CONNECT_INSTANCE_ID" \
 #                                  --state-bucket "$TF_STATE_BUCKET"
 #
+# The AWS account id is read from `aws sts get-caller-identity`, so the plan
+# names the account whose credentials are actually in use. Override it with
+# --account-id only when assuming a role across accounts.
+#
 # --instance-id is required: var.connect_instance_id has no default, so a plan
 # without it either fails under -input=false or silently uses whatever a
 # tfvars file happens to hold. It is passed to Terraform explicitly so the
@@ -30,6 +34,7 @@ REGION="${AWS_REGION:-eu-central-1}"
 INSTANCE_ID="${AWS_CONNECT_INSTANCE_ID:-}"
 STATE_BUCKET="${TF_STATE_BUCKET:-}"
 STATE_KEY="${TF_STATE_KEY:-}"
+ACCOUNT_ID="${AWS_ACCOUNT_ID:-}"
 ACCESS_CODE_FILE=""
 SKIP_BUILD="false"
 TF_DIR="infrastructure/terraform"
@@ -40,9 +45,12 @@ while [ $# -gt 0 ]; do
     --instance-id) INSTANCE_ID="${2:?--instance-id needs a value}"; shift 2 ;;
     --state-bucket) STATE_BUCKET="${2:?--state-bucket needs a value}"; shift 2 ;;
     --state-key) STATE_KEY="${2:?--state-key needs a value}"; shift 2 ;;
+    --account-id) ACCOUNT_ID="${2:?--account-id needs a value}"; shift 2 ;;
     --access-code-file) ACCESS_CODE_FILE="${2:?--access-code-file needs a path}"; shift 2 ;;
     --skip-build) SKIP_BUILD="true"; shift ;;
-    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
+    # Prints the header block, however long it grows - a line range silently
+    # truncates the help every time the header gains a paragraph.
+    -h|--help) awk 'NR>1 && /^#/ {print; next} NR>1 {exit}' "$0"; exit 0 ;;
     *) echo "unrecognized argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -52,6 +60,36 @@ command -v terraform >/dev/null || { echo "terraform not found" >&2; exit 1; }
 command -v curl >/dev/null || { echo "curl not found" >&2; exit 1; }
 command -v node >/dev/null || { echo "node not found" >&2; exit 1; }
 [ -n "$INSTANCE_ID" ] || { echo "pass --instance-id or set AWS_CONNECT_INSTANCE_ID" >&2; exit 1; }
+
+# ---------------------------------------------------------------------------
+# The account id, read from the credentials actually in use.
+#
+# var.aws_account_id has no default and the plan cannot proceed without it. It
+# is DERIVED rather than written down: a hardcoded id would silently plan
+# against the wrong account whenever the shell's credentials point elsewhere,
+# and the ARNs Terraform builds from it (the Lex alias, the Connect flow
+# resource in the voice-session policy) would name an account that is not the
+# one being deployed to.
+#
+# --account-id / AWS_ACCOUNT_ID stays available for the case where the caller
+# assumes a role in one account to deploy into another.
+# ---------------------------------------------------------------------------
+if [ -z "$ACCOUNT_ID" ]; then
+  ACCOUNT_ID="$(
+    aws sts get-caller-identity --region "$REGION" \
+      --query Account --output text 2>/dev/null || echo ""
+  )"
+fi
+# `aws --output text` prints the string None rather than failing on some
+# partial responses, so check the shape instead of trusting a non-empty value.
+if ! printf '%s' "$ACCOUNT_ID" | grep -Eq '^[0-9]{12}$'; then
+  echo "REFUSING: could not determine the AWS account id." >&2
+  echo "aws sts get-caller-identity returned: '${ACCOUNT_ID:-<empty>}'" >&2
+  echo "Check that credentials are configured for the intended account, or" >&2
+  echo "pass --account-id explicitly." >&2
+  exit 1
+fi
+echo "    deploying into account $ACCOUNT_ID ($REGION)"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=scripts/judge-voice/backend.sh
@@ -90,6 +128,7 @@ echo
 echo "==> terraform plan (Stage A)"
 terraform plan -input=false -out=stage-a.tfplan \
   -var "aws_region=$REGION" \
+  -var "aws_account_id=$ACCOUNT_ID" \
   -var "connect_instance_id=$INSTANCE_ID" \
   -var 'webrtc_judge_mode_enabled=true' \
   -var 'procurement_table_enabled=true'
